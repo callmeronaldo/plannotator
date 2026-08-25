@@ -5,7 +5,7 @@ import type {
   SemanticDiffChange,
 } from '@plannotator/shared/semantic-diff-types';
 import { useReviewStateOptional } from '../dock/ReviewStateContext';
-import { useFileSemanticChanges } from '../hooks/useFileSemanticChanges';
+import { useFileSemanticChanges, useSemanticDiffAnalysisRequested } from '../hooks/useFileSemanticChanges';
 import { SemanticDiffRows, lineSelectionForChange } from '../dock/panels/semanticDiffShared';
 
 const CLOSE_DELAY_MS = 140;
@@ -14,14 +14,24 @@ const CLOSE_DELAY_MS = 140;
  * A compact "sem · N" pill shown in a file header. On hover it opens a popover
  * with that file's semantic changes — the same terminal rows as the semantic
  * panel. Renders nothing unless sem is available and the file has named changes.
+ *
+ * Manual trigger: the analysis does NOT run when the badge mounts. It starts
+ * on an explicit request — the header run button (session-wide, via
+ * useSemanticDiffAnalysisRequested) or this badge's own first hover (one
+ * shared, per-patch cached fetch for every badge). The semantic panel
+ * fetches on its own when the user opens it by hand.
  */
 export const SemanticFileBadge: React.FC<{ filePath: string }> = ({ filePath }) => {
   const state = useReviewStateOptional();
   const available = state?.semanticDiffAvailable === true;
+  const analysisRequested = useSemanticDiffAnalysisRequested();
+  const [requested, setRequested] = useState(false);
+  const requestAnalysis = () => setRequested(true);
+  const triggered = requested || analysisRequested;
   const { loading, changes, binaryChanges } = useFileSemanticChanges(
     filePath,
     state?.rawPatch ?? '',
-    available,
+    available && triggered,
   );
 
   const [open, setOpen] = useState(false);
@@ -40,10 +50,26 @@ export const SemanticFileBadge: React.FC<{ filePath: string }> = ({ filePath }) 
 
   const count = changes.length + binaryChanges.length;
   if (!state || !available) return null;
-  // Sem is available but this file has no named changes (or is still
-  // resolving): show a disabled "sem 0" so every header carries the badge in
-  // the same spot — consistent look, aligned buttons, no popover.
-  if (loading || count === 0) {
+  // Idle ("sem ·"): analysis not requested yet — hovering the pill starts it.
+  // Resolving ("sem …"): requested and still running. Both keep the disabled
+  // look so every header carries the badge in the same spot.
+  if (!triggered || loading) {
+    return (
+      <span
+        className="semantic-file-badge semantic-file-badge-disabled"
+        onMouseEnter={requestAnalysis}
+        title={!triggered ? 'Hover to analyze semantic changes (or use the ∆ header button)' : 'Analyzing semantic changes…'}
+        aria-disabled="true"
+      >
+        <span className="semantic-file-badge-label">sem</span>
+        <span className="semantic-file-badge-count">{!triggered ? '·' : '…'}</span>
+      </span>
+    );
+  }
+  // Sem is available but this file has no named changes: show a disabled
+  // "sem 0" so every header carries the badge in the same spot — consistent
+  // look, aligned buttons, no popover.
+  if (count === 0) {
     return (
       <span
         className="semantic-file-badge semantic-file-badge-disabled"

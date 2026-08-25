@@ -58,6 +58,7 @@ import {
   type CompactReviewAction,
   type CompactReviewDestination,
 } from './components/ReviewHeaderMenu';
+import { SemanticAnalysisButton } from './components/SemanticAnalysisButton';
 import { ReviewSidebar } from './components/ReviewSidebar';
 import type { ReviewSidebarTab } from './components/ReviewSidebar';
 import { SparklesIcon } from '@plannotator/ui/components/SparklesIcon';
@@ -4029,6 +4030,10 @@ const ReviewApp: React.FC = () => {
                   <span className="absolute top-0 right-0 w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
                 )}
               </button>
+            )}
+
+            {!isCompactTouchLayout && semanticDiffUsable && (
+              <SemanticAnalysisButton rawPatch={diffData?.rawPatch ?? ''} />
             )}
 
             <div className="w-px h-5 bg-border/50 mx-1 hidden lg:block" />

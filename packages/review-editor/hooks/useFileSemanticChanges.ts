@@ -81,6 +81,41 @@ export interface FileSemanticChanges {
   binaryChanges: SemanticDiffBinaryChange[];
 }
 
+// ---- Manual trigger (shared session state) ----
+// Semantic analysis never runs when badges mount. It starts only when the user
+// explicitly asks: the header run button, a badge hover, or opening the
+// semantic panel (which fetches on its own). The first explicit request arms
+// every badge for the rest of the session — the module cache below and the
+// server's per-patch cache keep later patches cheap.
+
+let analysisRequested = false;
+const analysisRequestListeners = new Set<() => void>();
+
+/**
+ * Manually start the shared semantic analysis for the current patch.
+ * Returns the response (for the caller's pending/count UI) or null when there
+ * is no patch to analyze yet.
+ */
+export function requestSemanticDiffAnalysis(rawPatch: string): Promise<SemanticDiffResponse | null> {
+  if (!rawPatch) return Promise.resolve(null);
+  analysisRequested = true;
+  analysisRequestListeners.forEach((listener) => listener());
+  return loadSemanticDiff(rawPatch);
+}
+
+/** True once an explicit semantic analysis request has been made this session. */
+export function useSemanticDiffAnalysisRequested(): boolean {
+  const [requested, setRequested] = useState(analysisRequested);
+  useEffect(() => {
+    const listener = () => setRequested(analysisRequested);
+    analysisRequestListeners.add(listener);
+    return () => {
+      analysisRequestListeners.delete(listener);
+    };
+  }, []);
+  return requested;
+}
+
 const EMPTY: FileSemanticChanges = { loading: false, changes: [], binaryChanges: [] };
 
 /** Named (non-orphan) semantic changes for a single file, or empty when disabled/unavailable. */
