@@ -28,7 +28,6 @@ export function useDiffFreshness({
   resetKey,
   snapshotId,
   onAgentCwd,
-  onBaseBehindRemote,
 }: {
   enabled: boolean;
   /** Identity of the current diff snapshot (e.g. the rawPatch string). A new
@@ -36,8 +35,8 @@ export function useDiffFreshness({
   resetKey: string;
   /** Server snapshot id (draftKey) delivered with the diff this client is
    * rendering. Echoed on every probe so the server answers PER CLIENT: if
-   * the server's snapshot has moved (startup base upgrade, another tab's
-   * switch), THIS client goes stale even when the VCS fingerprint matches —
+   * the server's snapshot has moved (another tab's switch), THIS client goes
+   * stale even when the VCS fingerprint matches —
    * and a freshly-loaded tab holding the current snapshot stays fresh. */
   snapshotId?: string;
   /** Called when a probe re-advertises the PR-mode local checkout (or null when
@@ -45,18 +44,12 @@ export function useDiffFreshness({
    * switches without a page reload. A probe that omits the field leaves the
    * current value untouched (non-PR sessions never send it). */
   onAgentCwd?: (cwd: string | null) => void;
-  /** Called with the probe's baseBehindRemote flag (false when the field is
-   * omitted) — the local origin/<default> tracking ref is behind the actual
-   * remote, i.e. the baseline needs a fetch. */
-  onBaseBehindRemote?: (behind: boolean) => void;
 }): DiffFreshness {
   const [staleFingerprint, setStaleFingerprint] = useState<string | null>(null);
   const [dismissedFingerprint, setDismissedFingerprint] = useState<string | null>(null);
   // Latest callback in a ref so the polling effect never resubscribes for it.
   const onAgentCwdRef = useRef(onAgentCwd);
   onAgentCwdRef.current = onAgentCwd;
-  const onBaseBehindRemoteRef = useRef(onBaseBehindRemote);
-  onBaseBehindRemoteRef.current = onBaseBehindRemote;
 
   // New snapshot → clean slate. snapshotId is part of snapshot identity too:
   // a new snapshot can reuse the same patch TEXT with a different id (mode
@@ -93,7 +86,6 @@ export function useDiffFreshness({
             fresh: boolean;
             fingerprint?: string;
             agentCwd?: string | null;
-            baseBehindRemote?: boolean;
           };
           // Keep polling even while stale: a reverted edit flips back to
           // fresh, and a FURTHER change updates the fingerprint so a
@@ -102,8 +94,6 @@ export function useDiffFreshness({
           // PR mode re-advertises the live local checkout each probe; non-PR
           // probes omit the field entirely (leave agentCwd untouched).
           if ('agentCwd' in data) onAgentCwdRef.current?.(data.agentCwd ?? null);
-          // Baseline-behind flag: emitted as true or omitted (= false).
-          onBaseBehindRemoteRef.current?.(data.baseBehindRemote === true);
         }
       } catch {
         // Transient/network/server-gone: ignore — staleness is best-effort.

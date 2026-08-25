@@ -72,20 +72,12 @@ Platform posting is intentionally limited to **Layer** because GitHub and GitLab
 
 ## Switching diff types
 
-By default the review opens showing **all changes since your base branch** — everything a pull request would show if you committed and pushed right now: committed work, uncommitted edits, and untracked files, compared against the merge base with `main` (or your default branch). You can switch what you're comparing using the diff type dropdown in the toolbar. The available options are:
+For local Git reviews, the diff picker intentionally has two choices:
 
-- **All changes** (since main) - committed + uncommitted + untracked, vs the merge base with your base branch. The default, and the diff behind the Git status panel view.
-- **Uncommitted changes** - everything that differs from HEAD, including untracked files
-- **Staged changes** - only what's in the staging area (what `git commit` would include)
-- **Unstaged changes** - working tree changes that haven't been staged yet, plus untracked files
-- **Last commit** - the diff introduced by the most recent commit
-- **vs main** (or your default branch) - all committed changes on your branch compared to the base branch. Only appears when you're on a branch other than the default.
+- **Uncommitted changes** — all tracked and untracked changes that are not committed.
+- **Compare branches** — select **Branch 1** and **Branch 2** directly to compare any two local or remote refs.
 
-The first time you open a review, a setup dialog lets you choose your default view and diff type; you can change both later in **Settings → Git** or reopen the dialog from the review header menu. On repos where the base branch can't be resolved, the review falls back to uncommitted changes.
-
-If the base branch has moved on GitHub since your last fetch, a "Baseline is behind" banner offers a one-click fetch so you're reviewing against the real base.
-
-You can also pick a specific commit as the diff base from the base branch picker. This lets you compare against any of the last 20 commits on your branch rather than just the branch tip.
+Branch comparison uses the selected refs exactly (`git diff Branch 1..Branch 2`), so the current checkout does not limit which branches can be compared.
 
 ### Jujutsu (jj) diff modes
 
@@ -119,7 +111,7 @@ The standalone GitButler CLI installer supports macOS and Linux. On Windows, ins
 
 The review UI shows your changes in a familiar diff format:
 
-- **Left panel views** — a `Git status | Tree | Commits` toggle in the header (see below)
+- **Flat file list** with direct branch selectors for branch comparisons
 - **Viewed tracking** to mark files as reviewed and track your progress
 - **Unified diff** showing additions and deletions in context
 - **Annotation tools** with the same annotation types as plan review (delete, comment, quick label, "looks good")
@@ -143,13 +135,9 @@ For working-tree modes, Plannotator creates temporary synthetic Git commits from
 
 Call Flow is syntactic and does not resolve types, imports, runtime dispatch, or data flow. It currently requires a local Git checkout and is unavailable for multi-repository workspace reviews, GitButler committed views, jj, P4, and the baseline-free All Files mode.
 
-### Panel views
+### File list
 
-The left panel has three views. The header toggle is session-scoped — glancing at another view never changes your saved default (that's a Settings / setup-dialog decision).
-
-- **Git status** (default) — your changes grouped the way `git status` groups them: **Committed / Changes / Untracked**. Each row shows viewed state, a stage/unstage button, the change-type letter, and +/- counts. Only available with the "All changes" diff.
-- **Tree** — the classic file tree over whichever diff type you've selected.
-- **Commits** — a linear history rail of your branch, newest first, with an "In origin/main" divider where your work meets the base. Clicking a commit opens that commit's own diff (vs its parent), headed by the full commit message. Local git sessions only; a commit is never saved as your opening view.
+The local review sidebar stays focused on the selected diff's files. It exposes the same two workflows above rather than a separate Git-status or commit-history navigation mode.
 
 ## Annotating code
 
@@ -233,10 +221,9 @@ Runtime keys use Plannotator's runtime identifiers. For code review, the current
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/diff` | GET | Returns diff data including `rawPatch`, `gitRef`, `origin`, `diffType`, `base`, `hideWhitespace`, `gitContext`, plus the git-status `sections` and commit-metadata sidecars |
-| `/api/diff/switch` | POST | Switch diff type (including `commit:<sha>`), base branch/commit, or whitespace mode |
+| `/api/diff/switch` | POST | Switch between uncommitted changes and two-branch comparison (`diffType`, `base`, `compareBranch`), or whitespace mode |
 | `/api/diff/fresh` | GET | Cheap staleness probe backing the "Diff out of date" notice |
 | `/api/commits` | GET | One page of the branch's linear history for the Commits panel |
-| `/api/fetch-base` | POST | Fetch the base branch's remote tracking ref ("Baseline is behind" banner) |
 | `/api/semantic-diff` | GET | Semantic diff for the active patch, when available |
 | `/api/file-content` | GET | Full file content for expandable diff context |
 | `/api/git-add` | POST | Stage or unstage a file |

@@ -203,7 +203,7 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
             Copy path
           </ContextMenu.Item>
           <ContextMenu.Item
-            onClick={() => { void copyTextToClipboard(node.name); }}
+            onClick={() => { void copyTextToClipboard(node.name.split('/').pop() || node.name); }}
             className="flex items-center gap-2 mx-1 px-2 py-1.5 text-xs rounded cursor-pointer outline-none text-foreground/80 data-[highlighted]:bg-muted data-[highlighted]:text-foreground"
           >
             Copy filename

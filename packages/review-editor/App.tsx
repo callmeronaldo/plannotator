@@ -487,14 +487,15 @@ const ReviewApp: React.FC = () => {
   //                   produced "trailing context mismatch" warnings).
   const [selectedBase, setSelectedBase] = useState<string | null>(null);
   const [committedBase, setCommittedBase] = useState<string | null>(null);
+  // Explicit right-hand ref for the two-branch comparison mode. HEAD is used
+  // only for detached-head sessions; normal sessions initialize to the current
+  // branch so the first comparison matches the old branch-vs-HEAD behavior.
+  const [selectedCompareBranch, setSelectedCompareBranch] = useState<string | null>(null);
   // Since-base sections sidecar (committed / changes / untracked grouping).
   const [sections, setSections] = useState<SinceBaseSections | null>(null);
   // Commit metadata sidecar while a commit:<sha> diff is active — drives the
   // description card + collapsed seeding on the all-files surface.
   const [commitInfo, setCommitInfo] = useState<CommitDiffInfo | null>(null);
-  // The local origin/<default> tracking ref is behind the actual remote —
-  // the "Baseline is behind GitHub · Fetch" banner.
-  const [baseBehindRemote, setBaseBehindRemote] = useState(false);
   // Server snapshot id (draftKey) for the diff this client is RENDERING.
   // Echoed on every freshness probe so the server can answer per-client:
   // "your snapshot moved" is independent of whether the VCS changed.
@@ -502,7 +503,6 @@ const ReviewApp: React.FC = () => {
   const semanticDiffUsable = semanticDiffEnabled && semanticDiffAvailable;
   const callFlowAvailable = callFlowEnabled && callFlowAdvert.available;
   const { state: callFlowAnalysis, retry: retryCallFlowAnalysis } = useCallFlowAnalysis(snapshotId, callFlowAvailable);
-  const [isFetchingBase, setIsFetchingBase] = useState(false);
   // Which left panel is showing. The persisted value (Settings / first-run
   // dialog, written through the coupled setters in config/reviewView)
   // decides what a review OPENS on unless a last-used view is recorded; the
@@ -544,12 +544,11 @@ const ReviewApp: React.FC = () => {
 
   const { prMetadata, prStackInfo, prStackTree, prDiffScope, prDiffScopeOptions, prPatchIncomplete, prPatchUpgradeAvailable, updatePRSession } = usePRSession();
 
-  // The Commits view (linear history rail) exists for plain local git
-  // sessions only — PR/workspace/jj/p4 keep their existing panels. Unlike
-  // sections it has NO coupled diff: the review opens on the user's normal
-  // default until a commit is clicked, and the clicked sha is never persisted.
-  // Declared this early because the global keyboard handler consults it.
-  const commitsCapable = !prMetadata && reviewMode !== 'workspace' && gitContext?.vcsType === 'git';
+  // Keep the navigator focused on the two review workflows: uncommitted
+  // changes and an explicit two-branch comparison. The historical commit rail
+  // remains in the code for compatibility with older sessions, but is not
+  // offered by the simplified review surface.
+  const commitsCapable = false;
   const showCommitsPanel = commitsCapable && panelView === 'commits';
   // The diff the session was reviewing before the Commits view's commit
   // clicks (or its HEAD auto-select) took over the single session-global
@@ -1714,7 +1713,7 @@ const ReviewApp: React.FC = () => {
         sections?: SinceBaseSections;
         commitInfo?: CommitDiffInfo;
         generatedFiles?: string[];
-        baseBehindRemote?: boolean;
+        compareBranch?: string;
         snapshotId?: string;
         serverConfig?: Record<string, unknown> & { displayName?: string; gitUser?: string };
       }) => {
@@ -1752,6 +1751,10 @@ const ReviewApp: React.FC = () => {
           const initial = data.base || data.gitContext.defaultBranch || data.gitContext.compareTarget?.fallback || null;
           setSelectedBase(initial);
           setCommittedBase(initial);
+          setSelectedCompareBranch(
+            data.compareBranch ||
+            (data.gitContext.currentBranch && data.gitContext.currentBranch !== '(detached)' ? data.gitContext.currentBranch : 'HEAD'),
+          );
         }
         if (data.agentCwd !== undefined) setAgentCwd(data.agentCwd);
         if (data.sharingEnabled !== undefined) setSharingEnabled(data.sharingEnabled);
@@ -1779,7 +1782,6 @@ const ReviewApp: React.FC = () => {
         setSections(data.sections ?? null);
         setCommitInfo(data.commitInfo ?? null);
         setGeneratedFiles(new Set(data.generatedFiles ?? []));
-        setBaseBehindRemote(data.baseBehindRemote === true);
         // First-run: offer the review-view chooser for a plain local git
         // session (not workspace/PR/jj/p4), once. An unseen reviewer's panel
         // is initialized to Tree while inheriting the resolved diff default;
@@ -2109,14 +2111,11 @@ const ReviewApp: React.FC = () => {
     });
   }, [prMetadata]);
 
-  // The three-stack sections panel exists only for the since-base composite
-  // view in a plain git session (PR/workspace keep the classic tree).
-  const sectionsAvailable = !!sections && activeDiffBase === 'since-base' && !prMetadata && reviewMode !== 'workspace';
-  // The sections view IS the since-base comparison — a repo that supports it
-  // shows the view toggle even while an advanced (tree) mode is active, and
-  // toggling back to Sections switches the diff back to since-base.
-  const sectionsCapable = !prMetadata && reviewMode !== 'workspace'
-    && !!gitContext?.diffOptions?.some(option => option.id === 'since-base');
+  // The simplified local review intentionally does not expose the historical
+  // Git-status/Sections panel. Keep the sidecar data readable for compatibility
+  // with an older server snapshot, but always render the ordinary file list.
+  const sectionsAvailable = false;
+  const sectionsCapable = false;
   const activeCommitSha = activeDiffBase.startsWith('commit:')
     ? activeDiffBase.slice('commit:'.length)
     : null;
@@ -2268,7 +2267,7 @@ const ReviewApp: React.FC = () => {
   // Shared helper: fetch a diff switch and update state.
   // Returns true on success, false on failure — callers that optimistically
   // updated UI state (e.g. the base picker) can use this to revert.
-  const fetchDiffSwitch = useCallback(async (fullDiffType: string, baseOverride?: string, options?: { preserveFile?: boolean; explicitBase?: boolean }): Promise<boolean> => {
+  const fetchDiffSwitch = useCallback(async (fullDiffType: string, baseOverride?: string, options?: { preserveFile?: boolean; explicitBase?: boolean; compareBranch?: string }): Promise<boolean> => {
     setIsLoadingDiff(true);
     try {
       const res = await fetch('/api/diff/switch', {
@@ -2280,11 +2279,11 @@ const ReviewApp: React.FC = () => {
           // so forwarding unconditionally is safe and keeps the request shape uniform.
           ...((baseOverride ?? selectedBase) && { base: baseOverride ?? selectedBase }),
           hideWhitespace: diffHideWhitespace,
-          // True only when the base came from the picker THIS request — the
-          // server then honors it verbatim (no origin/* canonicalization).
-          // Echoed bases (diff-type switches, refreshes) stay canonicalizable
-          // so an early-loaded client can't revert the startup base upgrade.
+          // Preserve the explicit-base marker for older server integrations.
           ...(options?.explicitBase && { explicitBase: true }),
+          ...((options?.compareBranch || (fullDiffType === 'branch' && selectedCompareBranch)) && {
+            compareBranch: options?.compareBranch || selectedCompareBranch,
+          }),
         }),
       });
 
@@ -2305,7 +2304,7 @@ const ReviewApp: React.FC = () => {
         sections?: SinceBaseSections;
         commitInfo?: CommitDiffInfo;
         generatedFiles?: string[];
-        baseBehindRemote?: boolean;
+        compareBranch?: string;
         superseded?: boolean;
       };
 
@@ -2328,7 +2327,7 @@ const ReviewApp: React.FC = () => {
       setSections(data.sections ?? null);
       setCommitInfo(data.commitInfo ?? null);
       setGeneratedFiles(new Set(data.generatedFiles ?? []));
-      setBaseBehindRemote(data.baseBehindRemote === true);
+      if (data.compareBranch) setSelectedCompareBranch(data.compareBranch);
 
       if (options?.preserveFile) {
         // Whitespace toggle: update patch in-place, keep the active file.
@@ -2336,11 +2335,8 @@ const ReviewApp: React.FC = () => {
         // dock panel to the first remaining file.
         setDiffData(prev => prev ? { ...prev, rawPatch: data.rawPatch, gitRef: data.gitRef, aiReviewContext: data.aiReviewContext } : prev);
         if (data.diffOptions) setWorkspaceDiffOptions(data.diffOptions);
-        // Adopt the server's base even on in-place refreshes: the staleness
-        // Refresh and post-Fetch paths both preserveFile, and they're exactly
-        // when the server may canonicalize the base (main -> origin/main after
-        // the startup upgrade). Keeping the old name would send /api/file-content
-        // and Ask AI context requests against the wrong base.
+        // Adopt the server's base even on in-place refreshes so file-content
+        // requests and review context continue to use the same ref as the patch.
         if (data.base) {
           setSelectedBase(data.base);
           setCommittedBase(data.base);
@@ -2405,10 +2401,10 @@ const ReviewApp: React.FC = () => {
     } finally {
       setIsLoadingDiff(false);
     }
-  }, [dockApi, resetStagedFiles, selectedBase, diffHideWhitespace, files, activeFileIndex, openDiffFile, applySemanticDiffAdvert, applyCallFlowAdvert, clearPendingSelection]);
+  }, [dockApi, resetStagedFiles, selectedBase, selectedCompareBranch, diffHideWhitespace, files, activeFileIndex, openDiffFile, applySemanticDiffAdvert, applyCallFlowAdvert, clearPendingSelection]);
 
-  // Switch the base branch the current diff compares against.
-  // Only triggers a refetch when the active mode actually uses a base.
+  // Switch Branch 1 in the two-branch comparison. Legacy base-dependent
+  // modes still use this handler when an older session restores them.
   // Optimistically updates the picker; reverts if the server-side switch
   // fails so the chip doesn't lie about what the viewer is actually showing.
   const handleBaseSelect = useCallback(
@@ -2417,14 +2413,32 @@ const ReviewApp: React.FC = () => {
       const previous = selectedBase;
       setSelectedBase(branch);
       if (activeDiffBase === 'since-base' || activeDiffBase === 'branch' || activeDiffBase === 'merge-base' || activeDiffBase === 'jj-line' || activeDiffBase === 'jj-evolog') {
-        const ok = await fetchDiffSwitch(diffType, branch, { explicitBase: true });
+        const ok = await fetchDiffSwitch(diffType, branch, {
+          explicitBase: true,
+          ...(activeDiffBase === 'branch' && selectedCompareBranch ? { compareBranch: selectedCompareBranch } : {}),
+        });
         if (!ok) setSelectedBase(previous);
       }
     },
-    [selectedBase, activeDiffBase, diffType, fetchDiffSwitch],
+    [selectedBase, activeDiffBase, diffType, selectedCompareBranch, fetchDiffSwitch],
   );
 
-  // Switch diff type (uncommitted, last-commit, branch) — composes worktree prefix if active
+  const handleCompareBranchSelect = useCallback(
+    async (branch: string) => {
+      if (branch === selectedCompareBranch) return;
+      const previous = selectedCompareBranch;
+      setSelectedCompareBranch(branch);
+      const base = selectedBase ?? gitContext?.defaultBranch ?? branch;
+      const ok = await fetchDiffSwitch('branch', base, {
+        explicitBase: true,
+        compareBranch: branch,
+      });
+      if (!ok) setSelectedCompareBranch(previous);
+    },
+    [selectedCompareBranch, selectedBase, gitContext, fetchDiffSwitch],
+  );
+
+  // Switch between the two local review workflows — composes a worktree prefix if active.
   const handleDiffSwitch = useCallback(async (baseDiffType: string) => {
     const fullDiffType = activeWorktreePath
       ? `worktree:${activeWorktreePath}:${baseDiffType}`
@@ -2653,39 +2667,7 @@ const ReviewApp: React.FC = () => {
     resetKey: diffData?.rawPatch ?? '',
     snapshotId,
     onAgentCwd: setAgentCwd,
-    onBaseBehindRemote: setBaseBehindRemote,
   });
-
-  // "Baseline is behind GitHub · Fetch" — fetch the remote default branch,
-  // then recompute the current diff in place (preserving the active file).
-  // Live diff selection for async completions that must detect "the user
-  // moved on" (see handleFetchBase). Updated every render.
-  const liveSelectionRef = useRef({ diffType, selectedBase });
-  liveSelectionRef.current = { diffType, selectedBase };
-
-  const handleFetchBase = useCallback(async () => {
-    // Captured at click time; compared against the live ref when the fetch
-    // completes. The replay exists to refresh the SAME view with the fetched
-    // baseline — if the user switched diff type or base while the (possibly
-    // slow) fetch ran, replaying the captured values would win the switch
-    // epoch and silently yank them back to the old view.
-    const captured = { diffType, selectedBase };
-    setIsFetchingBase(true);
-    try {
-      const res = await fetch('/api/fetch-base', { method: 'POST' });
-      if (!res.ok) return;
-      const data = await res.json() as { ok?: boolean; baseBehindRemote?: boolean };
-      setBaseBehindRemote(data.baseBehindRemote === true);
-      const now = liveSelectionRef.current;
-      if (now.diffType === captured.diffType && now.selectedBase === captured.selectedBase) {
-        await fetchDiffSwitch(captured.diffType, captured.selectedBase ?? undefined, { preserveFile: true });
-      }
-    } catch {
-      // Best-effort: the banner stays and the user can retry.
-    } finally {
-      setIsFetchingBase(false);
-    }
-  }, [diffType, selectedBase, fetchDiffSwitch]);
 
   const handleRefreshStaleDiff = useCallback(() => {
     if (prMetadata) {
@@ -3856,31 +3838,6 @@ const ReviewApp: React.FC = () => {
                   </div>
                 )}
 
-                {/* Baseline staleness — origin/<default> is behind the actual
-                    remote, so the "since main" comparison is against stale
-                    GitHub state. Fetch catches the tracking ref up and
-                    recomputes the diff in place. */}
-                {!isCompactTouchLayout && baseBehindRemote && !prMetadata && !isLoadingDiff && (
-                  <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300 px-2 py-1 bg-amber-500/10 rounded border border-amber-500/25">
-                    <span className="hidden md:inline">Baseline is behind GitHub</span>
-                    <span className="md:hidden">Base behind</span>
-                    {isFetchingBase ? (
-                      <span className="flex items-center gap-1.5 font-medium">
-                        <span className="inline-block w-3 h-3 border-[1.5px] border-current border-t-transparent rounded-full animate-spin" aria-hidden />
-                        Fetching…
-                      </span>
-                    ) : (
-                      <button
-                        onClick={handleFetchBase}
-                        className="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100 transition-colors"
-                        title="git fetch the default branch and recompute the diff"
-                      >
-                        Fetch
-                      </button>
-                    )}
-                  </div>
-                )}
-
                 {/* Agent mode: Close/SendFeedback flip + Approve */}
                 {!platformMode ? (
                   <AgentReviewActions
@@ -4100,13 +4057,6 @@ const ReviewApp: React.FC = () => {
               <span>Diff out of date</span>
               <button data-pn-touch-target type="button" onClick={handleRefreshStaleDiff} className="font-medium underline underline-offset-2">Refresh</button>
             </div>
-          ) : baseBehindRemote && !prMetadata && !isLoadingDiff ? (
-            <div className="shrink-0 flex items-center justify-between gap-3 border-b border-warning/20 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-              <span>Baseline is behind the remote.</span>
-              <button data-pn-touch-target type="button" onClick={handleFetchBase} disabled={isFetchingBase} className="font-medium underline underline-offset-2 disabled:opacity-60">
-                {isFetchingBase ? 'Fetching…' : 'Fetch'}
-              </button>
-            </div>
           ) : null
         )}
 
@@ -4255,6 +4205,8 @@ const ReviewApp: React.FC = () => {
                 selectedBase={prMetadata ? undefined : selectedBase ?? undefined}
                 detectedBase={prMetadata ? undefined : gitContext?.defaultBranch || gitContext?.compareTarget?.fallback}
                 onSelectBase={prMetadata ? undefined : (base) => completeNavigatorSelection(() => handleBaseSelect(base))}
+                selectedCompareBranch={prMetadata ? undefined : selectedCompareBranch ?? undefined}
+                onSelectCompareBranch={prMetadata ? undefined : (branch) => completeNavigatorSelection(() => handleCompareBranchSelect(branch))}
                 compareTarget={gitContext?.compareTarget}
                 recentCommits={prMetadata ? undefined : gitContext?.recentCommits}
                 jjEvologs={prMetadata ? undefined : gitContext?.jjEvologs}

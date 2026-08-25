@@ -1451,6 +1451,33 @@ describe("review-core", () => {
     expect(result.error).not.toContain("core.bigFileThreshold");
   });
 
+  test("branch diff compares two explicit refs", async () => {
+    const repoDir = initRepo();
+    const runtime = makeRuntime(repoDir);
+    git(repoDir, ["checkout", "-b", "feature"]);
+    writeFileSync(join(repoDir, "tracked.txt"), "feature\n", "utf-8");
+    git(repoDir, ["add", "tracked.txt"]);
+    git(repoDir, ["commit", "-m", "feature"]);
+    git(repoDir, ["checkout", "main"]);
+
+    const result = await runGitDiff(runtime, "branch", "main", repoDir, { compareRef: "feature" });
+
+    expect(result.label).toBe("main: Changes: main → feature");
+    expect(result.patch).toContain("-before");
+    expect(result.patch).toContain("+feature");
+
+    const contents = await getFileContentsForDiff(
+      runtime,
+      "branch",
+      "main",
+      "tracked.txt",
+      undefined,
+      repoDir,
+      { compareRef: "feature" },
+    );
+    expect(contents).toEqual({ oldContent: "before\n", newContent: "feature\n" });
+  });
+
   test("git context lists worktrees and file content lookup returns old/new content", async () => {
     const repoDir = initRepo();
     const runtime = makeRuntime(repoDir);
@@ -1463,9 +1490,10 @@ describe("review-core", () => {
     writeFileSync(join(repoDir, "new-file.txt"), "brand new\n", "utf-8");
 
     const context = await getGitContext(runtime);
-    expect(context.diffOptions.map((option) => option.id)).toEqual(
-      expect.arrayContaining(["uncommitted", "staged", "unstaged", "last-commit"]),
-    );
+    expect(context.diffOptions.map((option) => option.id)).toEqual([
+      "uncommitted",
+      "branch",
+    ]);
     expect(
       context.worktrees.some((worktree) => worktree.path.endsWith("/feature-worktree")),
     ).toBe(true);

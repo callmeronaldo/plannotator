@@ -9,9 +9,10 @@ import type {
   SinceBaseSections,
   WorktreeInfo,
 } from '@plannotator/shared/types';
-import { buildFileTree, getAncestorPaths, getAllFolderPaths, getVisualFileOrder } from '../utils/buildFileTree';
+import type { FileTreeNode } from '../utils/buildFileTree';
 import { FileTreeNodeItem } from './FileTreeNode';
 import { BaseBranchPicker } from './BaseBranchPicker';
+import { BranchComparePicker } from './BranchComparePicker';
 import { EvoLogPicker } from './EvoLogPicker';
 import { DiffTypePicker } from './DiffTypePicker';
 import { WorktreePicker } from './WorktreePicker';
@@ -52,6 +53,8 @@ interface FileTreeProps {
   selectedBase?: string;
   detectedBase?: string;
   onSelectBase?: (branch: string) => void;
+  selectedCompareBranch?: string;
+  onSelectCompareBranch?: (branch: string) => void;
   compareTarget?: CompareTargetConfig;
   /** HEAD ancestry for the commit-baseline picker (git only, #709). */
   recentCommits?: RecentCommit[];
@@ -148,6 +151,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
   selectedBase,
   detectedBase,
   onSelectBase,
+  selectedCompareBranch,
+  onSelectCompareBranch,
   compareTarget,
   recentCommits,
   jjEvologs,
@@ -201,15 +206,29 @@ export const FileTree: React.FC<FileTreeProps> = ({
 }) => {
   const isSearchVisible = !!onSearchChange && (isSearchOpen || !!searchQuery.trim());
 
-  const tree = useMemo(() => buildFileTree(files), [files]);
+  // The navigator is intentionally flat: every changed file stays visible in
+  // patch order, without folder expansion state hiding the target.
+  const flatFileNodes = useMemo<FileTreeNode[]>(
+    () => files.map((file, fileIndex) => ({
+      type: 'file',
+      name: file.path,
+      path: file.path,
+      depth: 0,
+      fileIndex,
+      file,
+      additions: file.additions,
+      deletions: file.deletions,
+    })),
+    [files],
+  );
 
   // Since-base sidecar lookup for per-row lifecycle markers + stage buttons.
   const getSectionEntry = useMemo(() => {
     if (!sinceBaseSections) return undefined;
     return (filePath: string) => sinceBaseSections.files[filePath];
   }, [sinceBaseSections]);
-  const allFolderPaths = useMemo(() => getAllFolderPaths(tree), [tree]);
-  const visualOrder = useMemo(() => getVisualFileOrder(tree), [tree]);
+  const allFolderPaths: string[] = [];
+  const visualOrder = useMemo(() => files.map((_, index) => index), [files]);
 
   // Keyboard navigation: j/k or arrow keys
   const handleKeyDown = useCallback(
@@ -280,46 +299,10 @@ export const FileTree: React.FC<FileTreeProps> = ({
     [annotationCountMap],
   );
 
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set(allFolderPaths));
-  const [prevTree, setPrevTree] = useState(tree);
-
-  // Expand all folders when tree changes (initial render + diff switch)
-  if (tree !== prevTree) {
-    setPrevTree(tree);
-    setExpandedFolders(new Set(allFolderPaths));
-  }
-
-  // Auto-expand ancestors of the active file so j/k nav always reveals the target
-  useEffect(() => {
-    if (files[activeFileIndex]) {
-      const ancestors = getAncestorPaths(files[activeFileIndex].path);
-      setExpandedFolders((prev) => {
-        const missing = ancestors.filter((p) => !prev.has(p));
-        if (missing.length === 0) return prev;
-        const next = new Set(prev);
-        for (const p of missing) next.add(p);
-        return next;
-      });
-    }
-  }, [activeFileIndex, files]);
-
-  const handleToggleFolder = useCallback((path: string) => {
-    setExpandedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  }, []);
-
-  const areAllFoldersExpanded = allFolderPaths.length > 0 && allFolderPaths.every((path) => expandedFolders.has(path));
-
-  const handleToggleAllFolders = useCallback(() => {
-    setExpandedFolders(areAllFoldersExpanded ? new Set() : new Set(allFolderPaths));
-  }, [allFolderPaths, areAllFoldersExpanded]);
+  const expandedFolders = new Set<string>();
+  const handleToggleFolder = useCallback((_path: string) => {}, []);
+  const areAllFoldersExpanded = false;
+  const handleToggleAllFolders = useCallback(() => {}, []);
 
   const panelControls = (
     <PanelControlsRow
@@ -402,8 +385,10 @@ export const FileTree: React.FC<FileTreeProps> = ({
       </div>
 
       {/* Worktree + diff selectors — combined row when both present */}
-      {((worktrees && worktrees.length > 0 && onSelectWorktree) ||
-        (diffOptions && diffOptions.length > 0 && onSelectDiff)) && (
+      {(
+        (worktrees && worktrees.length > 0 && onSelectWorktree && !selectedCompareBranch) ||
+        (diffOptions && diffOptions.length > 0 && onSelectDiff)
+      ) && (
         <div className="px-2 py-1.5 border-b border-border/30 flex gap-2">
           {worktrees && worktrees.length > 0 && onSelectWorktree && (
             <div className="flex-1 min-w-0">
@@ -453,14 +438,29 @@ export const FileTree: React.FC<FileTreeProps> = ({
           </div>
         )}
 
-      {/* Compare target picker — only relevant for base-dependent diff types (not evolog) */}
-      {activeDiffType !== 'jj-evolog' &&
-        onSelectBase &&
-        selectedBase &&
-        detectedBase &&
+      {/* Native two-ref selector for branch comparison; the legacy picker remains
+          available only to non-Git integrations that still expose it. */}
+      {activeDiffType === 'branch' &&
         availableBranches &&
-        activeDiffType &&
-        compareTarget?.diffTypes.includes(activeDiffType) && (
+        selectedBase &&
+        selectedCompareBranch &&
+        onSelectBase &&
+        onSelectCompareBranch ? (
+          <BranchComparePicker
+            availableBranches={availableBranches}
+            leftBranch={selectedBase}
+            rightBranch={selectedCompareBranch}
+            onSelectLeft={onSelectBase}
+            onSelectRight={onSelectCompareBranch}
+            disabled={isLoadingDiff}
+          />
+        ) : activeDiffType !== 'jj-evolog' &&
+          onSelectBase &&
+          selectedBase &&
+          detectedBase &&
+          availableBranches &&
+          activeDiffType &&
+          compareTarget?.diffTypes.includes(activeDiffType) ? (
           <div className="px-2 py-1.5 border-b border-border/30 flex items-center gap-2">
             <span className="text-[10px] uppercase tracking-wide text-muted-foreground flex-shrink-0">
               {compareTarget.picker.rowLabel}
@@ -477,7 +477,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
               />
             </div>
           </div>
-        )}
+        ) : null}
 
       {/* File tree or search results */}
       <OverlayScrollArea className="flex-1 min-h-0">
@@ -547,7 +547,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
             )
           ) : (
             <>
-              {tree.map((node) => (
+              {flatFileNodes.map((node) => (
                 <FileTreeNodeItem
                   key={node.type === 'file' ? node.path : `folder:${node.path}`}
                   node={node}

@@ -30,7 +30,7 @@ const OPTION_HINTS: Record<string, string> = {
   'jj-line': "Changes in your line of work from the selected bookmark or revision.",
   'jj-evolog': "What changed between two evolutions of the current change — shows what you amended.",
   'jj-all': "Every tracked file in the current jj workspace, shown as additions.",
-  branch: "Straight compare against the base branch (picked below). Can show commits that aren't yours if the base has new commits.",
+  branch: "Compare the two branches selected below.",
   'merge-base': "Only what you've added on top of the base branch (picked below). Same as GitHub's PR view.",
   all: "Every tracked file at HEAD, shown as additions. Unlike Committed, which shows what changed vs a base branch, this shows the entire codebase.",
 };

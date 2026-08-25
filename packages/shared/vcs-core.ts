@@ -72,6 +72,7 @@ export interface VcsProvider {
     filePath: string,
     oldPath?: string,
     cwd?: string,
+    options?: GitDiffOptions,
   ): Promise<{ oldContent: string | null; newContent: string | null }>;
   /** Cheap staleness fingerprint for a diff (see review-core/jj-core). Providers
    * without an implementation (e.g. p4) are treated as always-fresh. */
@@ -127,6 +128,7 @@ export interface VcsApi {
     filePath: string,
     oldPath?: string,
     cwd?: string,
+    options?: GitDiffOptions,
   ): Promise<{ oldContent: string | null; newContent: string | null }>;
   /** Best-effort staleness fingerprint for the given diff parameters. `null`
    * means "cannot fingerprint" and must be treated as always-fresh. */
@@ -244,8 +246,8 @@ export function createGitProvider(runtime: ReviewGitRuntime): VcsProvider {
       return runGitDiff(runtime, diffType, defaultBranch, cwd, options);
     },
 
-    getFileContents(diffType, defaultBranch, filePath, oldPath?, cwd?) {
-      return getGitFileContentsForDiff(runtime, diffType, defaultBranch, filePath, oldPath, cwd);
+    getFileContents(diffType, defaultBranch, filePath, oldPath?, cwd?, options?) {
+      return getGitFileContentsForDiff(runtime, diffType, defaultBranch, filePath, oldPath, cwd, options);
     },
 
     getDiffFingerprint(diffType, defaultBranch, cwd?, options?) {
@@ -551,9 +553,10 @@ export function createVcsApi(providers: readonly VcsProvider[]): VcsApi {
       filePath: string,
       oldPath?: string,
       cwd?: string,
+      options?: GitDiffOptions,
     ): Promise<{ oldContent: string | null; newContent: string | null }> {
       const provider = await getProviderForOperation(diffType, cwd);
-      return provider.getFileContents(diffType, defaultBranch, filePath, oldPath, cwd);
+      return provider.getFileContents(diffType, defaultBranch, filePath, oldPath, cwd, options);
     },
 
     async getVcsDiffFingerprint(

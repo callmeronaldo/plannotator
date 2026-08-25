@@ -306,6 +306,8 @@ export function prepareGitCommand(
 
 export interface GitDiffOptions {
   hideWhitespace?: boolean;
+  /** The right-hand ref for an explicit branch comparison. Defaults to HEAD. */
+  compareRef?: string;
 }
 
 export function parseRemoteBookmark(target: string): { name: string; remote: string } | null {
@@ -621,53 +623,15 @@ export async function getGitContext(
 
   const diffOptions: DiffOption[] = [];
 
-  // "Since <base>" — the composite default: merge-base(base, HEAD) vs the
-  // working tree plus untracked. Everything a PR would show if pushed now.
-  // Emitted first so it wins resolveInitialDiffType's diffOptions[0] fallback.
-  //
-  // Only offer it when the base ref actually resolves. getDefaultBranch returns
-  // a literal "master" as a last resort even when no such ref exists (a repo
-  // whose trunk is e.g. `trunk`, or a clone with no origin/HEAD). If we offered
-  // since-base there it would become the auto-default, then merge-base fails and
-  // the diff degrades to HEAD — silently hiding all committed branch work. When
-  // it's absent, resolveInitialDiffType falls through to `uncommitted`.
-  if (defaultBranch) {
-    const baseResolves = (
-      await runtime.runGit(
-        ["rev-parse", "--verify", "--quiet", "--end-of-options", `${defaultBranch}^{commit}`],
-        { cwd },
-      )
-    ).exitCode === 0;
-    if (baseResolves) {
-      // Dynamic label so it matches the live gitRef header ("All changes
-      // since origin/main" / "... since master") rather than a hardcoded
-      // base name that contradicts it on non-main repos. The product/
-      // first-run copy uses the short form "All changes".
-      diffOptions.push({ id: "since-base", label: `All changes since ${displayRef(defaultBranch)}` });
-    }
-  }
-
   diffOptions.push(
     { id: "uncommitted", label: "Uncommitted changes" },
-    { id: "staged", label: "Staged changes" },
-    { id: "unstaged", label: "Unstaged changes" },
-    { id: "last-commit", label: "Last commit" },
+    { id: "branch", label: "Compare branches" },
   );
 
-  // Always offer Branch diff / PR Diff when a default branch exists. The
-  // older guard hid them when the reviewer was on the default branch (the
-  // `vs <default>` diff from the default branch itself is always empty), but
-  // the base picker now lets reviewers compare against any branch from any
-  // branch, so there's no meaningless-by-construction option. Also: preserving
-  // diff mode across worktree switches and Pi's `initialBase` can land the
-  // reviewer on the default branch with branch/merge-base already active — the
-  // old guard hid the active mode's option, trapping them. Unconditional
-  // emission keeps the active option reachable in every flow.
-  if (defaultBranch) {
-    diffOptions.push({ id: "merge-base", label: "Committed changes (PR view)" });
-  }
-
-  diffOptions.push({ id: "all", label: "All files (HEAD)" });
+  // The review intentionally exposes only the two local workflows: working-tree
+  // changes and an explicit comparison between two branches. Keep the provider's
+  // broader diff implementation available for integrations, but do not surface
+  // extra modes in the normal Git picker.
 
   const [worktrees, currentTreePathResult] = await Promise.all([
     getWorktrees(runtime, cwd),
@@ -686,7 +650,7 @@ export async function getGitContext(
     worktrees: worktrees.filter((wt) => wt.path !== currentTreePath),
     availableBranches,
     compareTarget: {
-      diffTypes: ["since-base", "branch", "merge-base"],
+      diffTypes: ["branch"],
       fallback: "main",
       picker: {
         rowLabel: "compare against",
@@ -1652,6 +1616,7 @@ export async function runGitDiff(
         // that starts with `-` being parsed as a git flag (e.g. `--output=...`
         // would redirect diff output to an attacker-chosen path). Same pattern
         // applied wherever user-controlled refs flow into a git argv.
+        const compareRef = options?.compareRef || "HEAD";
         const branchDiffArgs = [
           "diff",
           "--no-ext-diff",
@@ -1659,10 +1624,10 @@ export async function runGitDiff(
           "--src-prefix=a/",
           "--dst-prefix=b/",
           "--end-of-options",
-          `${defaultBranch}..HEAD`,
+          `${defaultBranch}..${compareRef}`,
         ];
         patch = await runBoundedTrackedDiff(runtime, branchDiffArgs, cwd);
-        label = `Changes vs ${displayRef(defaultBranch)}`;
+        label = `Changes: ${displayRef(defaultBranch)} → ${displayRef(compareRef)}`;
         break;
       }
 
@@ -1967,7 +1932,14 @@ export async function getGitDiffFingerprint(
         if (!(await hashUntracked())) return null;
         break;
       }
-      case "branch":
+      case "branch": {
+        const baseTip = await runReadOnlyGit(["rev-parse", "--end-of-options", defaultBranch]);
+        const compareRef = options?.compareRef || "HEAD";
+        const compareTip = await runReadOnlyGit(["rev-parse", "--end-of-options", compareRef]);
+        parts.push(baseTip.exitCode === 0 ? baseTip.stdout.trim() : "no-base");
+        parts.push(compareTip.exitCode === 0 ? compareTip.stdout.trim() : "no-compare");
+        break;
+      }
       case "merge-base": {
         const baseTip = await runReadOnlyGit(["rev-parse", "--end-of-options", defaultBranch]);
         parts.push(baseTip.exitCode === 0 ? baseTip.stdout.trim() : "no-base");
@@ -1993,6 +1965,7 @@ export async function getFileContentsForDiff(
   filePath: string,
   oldPath?: string,
   cwd?: string,
+  options?: GitDiffOptions,
 ): Promise<{ oldContent: string | null; newContent: string | null }> {
   const oldFilePath = oldPath || filePath;
 
@@ -2081,11 +2054,13 @@ export async function getFileContentsForDiff(
         oldContent: await gitShow("HEAD~1", oldFilePath),
         newContent: await gitShow("HEAD", filePath),
       };
-    case "branch":
+    case "branch": {
+      const compareRef = options?.compareRef || "HEAD";
       return {
         oldContent: await gitShow(defaultBranch, oldFilePath),
-        newContent: await gitShow("HEAD", filePath),
+        newContent: await gitShow(compareRef, filePath),
       };
+    }
     case "merge-base": {
       const mbResult = await runtime.runGit(["merge-base", "--end-of-options", defaultBranch, "HEAD"], { cwd });
       const mb = mbResult.exitCode === 0 ? mbResult.stdout.trim() : defaultBranch;
