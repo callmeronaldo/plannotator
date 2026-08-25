@@ -40,6 +40,12 @@ import { ToolbarHost, type ToolbarHostHandle } from './ToolbarHost';
 import { FileHeader } from './FileHeader';
 import { BinaryFileNotice } from './BinaryFileNotice';
 import { GeneratedFileNotice } from './GeneratedFileNotice';
+import {
+  DiffOverviewRuler,
+  buildDiffOverviewMarks,
+  type DiffOverviewMark,
+  type DiffOverviewScrollModel,
+} from './DiffOverviewRuler';
 import { EditSessionHud } from './EditSessionHud';
 import { FileCommentBanner } from './FileCommentBanner';
 import { annotationMatchesPrScope, isFileScopedAnnotation, lineRangeForAnnotation } from '../utils/annotationScope';
@@ -768,6 +774,83 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     [identity.items],
   );
 
+  // The default review landing is this virtualized all-files surface, not the
+  // single-file DiffViewer. Build one document-wide overview from CodeView's
+  // LOGICAL item offsets so the ruler remains accurate when Pierre rebases its
+  // bounded physical scroll scaffold for very large reviews.
+  const [overviewMarks, setOverviewMarks] = useState<DiffOverviewMark[]>([]);
+  const overviewUpdateRafRef = useRef<number | null>(null);
+  const recomputeOverviewMarks = useStableCallback(() => {
+    const handle = viewerRef.current;
+    const viewer = handle?.getInstance();
+    if (handle == null || viewer == null) {
+      setOverviewMarks([]);
+      return;
+    }
+
+    const documentHeight = viewer.getScrollHeight();
+    if (documentHeight <= 0) {
+      setOverviewMarks([]);
+      return;
+    }
+
+    const itemTops = orderedItemIds.map((id) => viewer.getTopForItem(id));
+    const nextMarks: DiffOverviewMark[] = [];
+    for (let index = 0; index < orderedItemIds.length; index += 1) {
+      const item = handle.getItem(orderedItemIds[index]);
+      const itemTop = itemTops[index];
+      if (item?.type !== 'diff' || itemTop == null) continue;
+
+      const relativeMarks = buildDiffOverviewMarks(item.fileDiff, diffStyle);
+      if (relativeMarks.length === 0) continue;
+
+      const nextTop = itemTops[index + 1];
+      const itemBottom = nextTop ?? Math.max(itemTop, documentHeight - 8);
+      if (item.collapsed === true) {
+        nextMarks.push({
+          top: Math.min(Math.max((itemTop + PANEL_HEADER_HEIGHT / 2) / documentHeight, 0), 1),
+          height: 3 / documentHeight,
+          additions: relativeMarks.reduce((sum, mark) => sum + mark.additions, 0),
+          deletions: relativeMarks.reduce((sum, mark) => sum + mark.deletions, 0),
+        });
+        continue;
+      }
+
+      const contentTop = itemTop + PANEL_HEADER_HEIGHT;
+      const contentHeight = Math.max(itemBottom - contentTop, 1);
+      for (const mark of relativeMarks) {
+        nextMarks.push({
+          top: Math.min(Math.max((contentTop + mark.top * contentHeight) / documentHeight, 0), 1),
+          height: Math.max(mark.height * contentHeight, 3) / documentHeight,
+          additions: mark.additions,
+          deletions: mark.deletions,
+        });
+      }
+    }
+    setOverviewMarks(nextMarks);
+  });
+
+  const scheduleOverviewUpdate = useStableCallback(() => {
+    if (overviewUpdateRafRef.current != null) return;
+    overviewUpdateRafRef.current = requestAnimationFrame(() => {
+      overviewUpdateRafRef.current = null;
+      recomputeOverviewMarks();
+    });
+  });
+
+  useEffect(() => {
+    scheduleOverviewUpdate();
+  }, [fileSetKey, diffStyle, leadingHeight, scrollEl, scheduleOverviewUpdate]);
+  useEffect(() => () => {
+    if (overviewUpdateRafRef.current != null) cancelAnimationFrame(overviewUpdateRafRef.current);
+  }, []);
+
+  const overviewScrollModel = useMemo<DiffOverviewScrollModel>(() => ({
+    getViewportHeight: () => viewerRef.current?.getInstance()?.getHeight() ?? scrollRef.current?.clientHeight ?? 0,
+    getScrollHeight: () => viewerRef.current?.getInstance()?.getScrollHeight() ?? 0,
+    scrollTo: (top) => viewerRef.current?.scrollTo({ type: 'position', position: top }),
+  }), [fileSetKey]);
+
   // Path -> DiffFile lookup for the on-demand content augmentation (P5). The
   // post-render callback resolves item.id -> path -> DiffFile to know which
   // file's patch/oldPath to fetch + reparse.
@@ -1473,6 +1556,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       // CodeView recycles elements across items.
       nodeToItemIdRef.current.set(node, context.id);
       augmentItem(context.id);
+      scheduleOverviewUpdate();
       const itemId = context.id;
       requestAnimationFrame(() => applyItemHighlights(node, itemId));
     },
@@ -2525,15 +2609,27 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     />
   );
 
+  const overviewEnabled = !compactTouchLayout && !readOnly && overviewMarks.length > 0;
+
   return (
     <div className="relative h-full">
-      {/* EditProvider only mounts when the experimental flag is on; its
-          factory declines attaches until the lazy editor chunk has loaded
-          (the chunk loads on first Edit click, never before). */}
-      {editEnabled ? (
-        <EditProvider createEditor={editSession.createEditor}>{codeView}</EditProvider>
-      ) : (
-        codeView
+      <div className={overviewEnabled ? 'absolute inset-y-0 left-0 right-3.5' : 'h-full'}>
+        {/* EditProvider only mounts when the experimental flag is on; its
+            factory declines attaches until the lazy editor chunk has loaded
+            (the chunk loads on first Edit click, never before). */}
+        {editEnabled ? (
+          <EditProvider createEditor={editSession.createEditor}>{codeView}</EditProvider>
+        ) : (
+          codeView
+        )}
+      </div>
+
+      {overviewEnabled && (
+        <DiffOverviewRuler
+          viewport={scrollEl}
+          marks={overviewMarks}
+          scrollModel={overviewScrollModel}
+        />
       )}
 
       {/* Leading content (commit description card) lives INSIDE the scroll

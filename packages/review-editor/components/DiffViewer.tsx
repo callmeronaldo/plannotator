@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
 import { FileDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
 import { getSingularPatch, processFile } from '@pierre/diffs';
-import { DiffOverviewRuler, type DiffOverviewMark } from './DiffOverviewRuler';
+import { DiffOverviewRuler, buildDiffOverviewMarks } from './DiffOverviewRuler';
 import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, DiffAnnotationMetadata, TokenAnnotationMeta, ConventionalLabel, ConventionalDecoration } from '@plannotator/ui/types';
 import type { DiffTokenEventBaseProps } from '@pierre/diffs';
 import { usePierreTheme } from '../hooks/usePierreTheme';
@@ -423,37 +423,12 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     }
   }, [patch, filePath, oldPath, fileContents, fileDiff]);
 
-  // Change-overview marks for the ruler: rendered-row fractions straight from
-  // the diff metadata (hydrated hunks carry cumulative line starts that already
-  // include the expanded unchanged gaps), so positions stay correct under
-  // virtualization and full-file expansion alike. The mark's top skips the
-  // hunk's leading context rows so it lands on the first changed line.
-  const overviewMarks = useMemo<DiffOverviewMark[]>(() => {
-    const hunks = augmentedDiff.hunks;
-    if (!hunks?.length) return [];
-    const total = diffStyle === 'split' ? augmentedDiff.splitLineCount : augmentedDiff.unifiedLineCount;
-    if (!total) return [];
-    const marks: DiffOverviewMark[] = [];
-    for (const hunk of hunks) {
-      const changed = (hunk.additionLines ?? 0) + (hunk.deletionLines ?? 0);
-      if (changed <= 0) continue;
-      let leading = 0;
-      if (Array.isArray(hunk.hunkContent)) {
-        for (const segment of hunk.hunkContent) {
-          if (segment.type === 'context') leading += segment.lines;
-          else break;
-        }
-      }
-      const start = (diffStyle === 'split' ? hunk.splitLineStart : hunk.unifiedLineStart) + leading;
-      marks.push({
-        top: Math.min(Math.max(start / total, 0), 1),
-        height: changed / total,
-        additions: hunk.additionLines ?? 0,
-        deletions: hunk.deletionLines ?? 0,
-      });
-    }
-    return marks;
-  }, [augmentedDiff, diffStyle]);
+  // Hydrated hunks carry cumulative rendered-row starts, including expanded
+  // unchanged gaps, so these marks remain aligned after full-content loading.
+  const overviewMarks = useMemo(
+    () => buildDiffOverviewMarks(augmentedDiff, diffStyle),
+    [augmentedDiff, diffStyle],
+  );
 
   const previousScrollFilePathRef = useRef(filePath);
   useLayoutEffect(() => {

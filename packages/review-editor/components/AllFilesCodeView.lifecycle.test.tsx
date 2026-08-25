@@ -43,9 +43,15 @@ mock.module('@pierre/diffs', () => ({
   getSingularPatch: (patch: string) => ({
     name: patch.includes('target.ts') ? 'target.ts' : 'file.ts',
     type: 'change',
-    hunks: [],
-    splitLineCount: 1,
-    unifiedLineCount: 1,
+    hunks: [{
+      additionLines: 1,
+      deletionLines: 1,
+      hunkContent: [],
+      splitLineStart: 0,
+      unifiedLineStart: 0,
+    }],
+    splitLineCount: 2,
+    unifiedLineCount: 2,
     isPartial: true,
     deletionLines: [],
     additionLines: [],
@@ -85,9 +91,9 @@ mock.module('@pierre/diffs/react', () => ({
       getInstance: () => ({
         getRenderedItems: () => [],
         getScrollTop: () => 0,
-        getScrollHeight: () => 0,
-        getHeight: () => 0,
-        getTopForItem: () => 0,
+        getScrollHeight: () => 200,
+        getHeight: () => 100,
+        getTopForItem: () => 8,
         scrollTo: (target: Record<string, unknown>) => scrollTargets.push(target),
       }),
     }));
@@ -203,6 +209,21 @@ describe('the @pierre/diffs restore handles', () => {
     expect(realPierreDiffs.processFile).not.toBe(stubbed.processFile);
     expect(realPierreDiffs.processFile.length).toBe(2);
     expect(realPierreDiffsReact.CodeView).not.toBe(stubbedReact.CodeView);
+  });
+});
+
+describe('AllFilesCodeView change overview', () => {
+  // Guards the default review landing surface: keeping the ruler only on the
+  // single-file panel made it absent from the all-files view users actually see.
+  test.skipIf(!hasDom)('renders the change ruler in the all-files surface', async () => {
+    host = document.createElement('div');
+    host.style.height = '400px';
+    document.body.appendChild(host);
+    root = createRoot(host);
+
+    await render();
+
+    expect(host.querySelector('[data-diff-overview-ruler]')).not.toBeNull();
   });
 });
 
