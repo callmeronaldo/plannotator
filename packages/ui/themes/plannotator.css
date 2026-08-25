@@ -24,7 +24,7 @@
   --warning-foreground: oklch(0.20 0.02 260);
 
   --font-sans: 'Inter Variable', 'Inter', system-ui, sans-serif;
-  --font-mono: 'Geist Mono Variable', 'Geist Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-mono: 'JetBrainsMono Nerd Font Mono', 'Geist Mono Variable', 'Geist Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   --radius: 0.625rem;
 
   --code-bg: oklch(0.26 0.02 260);
