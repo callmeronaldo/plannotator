@@ -411,6 +411,19 @@ const ReviewApp: React.FC = () => {
     setIsFileTreeOpen((isOpen) => !isOpen);
   }, [isCompactTouchLayout, reviewSidebar.close]);
 
+  // Search is opened by a global shortcut as well as the navigator button.
+  // Keep the compact surfaces mutually exclusive on this path too; otherwise
+  // ReviewSidebar (rendered later at the same z-index) can cover the search
+  // input inside CompactReviewOverlay.
+  const openNavigatorForSearch = useCallback(() => {
+    if (isCompactTouchLayout) {
+      reviewSidebar.close();
+      setIsCompactNavigatorOpen(true);
+    } else {
+      setIsFileTreeOpen(true);
+    }
+  }, [isCompactTouchLayout, reviewSidebar.close]);
+
   useEffect(() => {
     if (isCompactTouchLayout && reviewSidebar.isOpen) {
       setIsCompactNavigatorOpen(false);
@@ -1610,8 +1623,7 @@ const ReviewApp: React.FC = () => {
         if (guideOpen) return;
         if (hasSearchableFiles && !showCommitsPanel) {
           e.preventDefault();
-          if (isCompactTouchLayout) setIsCompactNavigatorOpen(true);
-          else setIsFileTreeOpen(true);
+          openNavigatorForSearch();
           openSearch();
         }
         return;
@@ -1673,7 +1685,7 @@ const ReviewApp: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showExportModal, showDestinationMenu, isSearchOpen, searchQuery, searchMatches, isSearchPending, openSearch, stepSearchMatch, clearSearch, closeSearch, aiUIEnabled, hasSearchableFiles, showCommitsPanel, reviewSidebar.isOpen, reviewSidebar.open, reviewSidebar.close, isFileTreeOpen, guideOpen, isCompactTouchLayout, isCompactNavigatorOpen, toggleNavigator]);
+  }, [showExportModal, showDestinationMenu, isSearchOpen, searchQuery, searchMatches, isSearchPending, openSearch, openNavigatorForSearch, stepSearchMatch, clearSearch, closeSearch, aiUIEnabled, hasSearchableFiles, showCommitsPanel, reviewSidebar.isOpen, reviewSidebar.open, reviewSidebar.close, isFileTreeOpen, guideOpen, isCompactTouchLayout, isCompactNavigatorOpen, toggleNavigator]);
 
 
   // Load diff content - try API first, fall back to demo

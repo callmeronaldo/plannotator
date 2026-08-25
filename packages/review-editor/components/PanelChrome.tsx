@@ -361,7 +361,7 @@ export function PanelSearchField({
 
   return (
     <div
-      className="flex items-center border-b border-border/50 px-2"
+      className="sticky top-0 z-20 flex items-center border-b border-border/50 bg-card/95 px-2 backdrop-blur-sm"
       style={{ height: "var(--panel-header-h)" }}
       data-panel-search-field
     >
