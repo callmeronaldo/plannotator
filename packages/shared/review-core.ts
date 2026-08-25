@@ -37,6 +37,7 @@ export type DiffType =
   | "jj-all"
   | "jj-evolog"
   | "branch"
+  | "commit-range"
   | "merge-base"
   | "all"
   | `commit:${string}`
@@ -627,11 +628,13 @@ export async function getGitContext(
     { id: "uncommitted", label: "Uncommitted changes" },
     { id: "branch", label: "Compare branches" },
   );
+  if (recentCommits.length >= 2) {
+    diffOptions.push({ id: "commit-range", label: "Compare commits" });
+  }
 
-  // The review intentionally exposes only the two local workflows: working-tree
-  // changes and an explicit comparison between two branches. Keep the provider's
-  // broader diff implementation available for integrations, but do not surface
-  // extra modes in the normal Git picker.
+  // Keep the ordinary local Git surface focused on three explicit workflows:
+  // working-tree changes, two branches, or two immutable commits. The broader
+  // provider implementation remains available to integrations.
 
   const [worktrees, currentTreePathResult] = await Promise.all([
     getWorktrees(runtime, cwd),
@@ -650,7 +653,7 @@ export async function getGitContext(
     worktrees: worktrees.filter((wt) => wt.path !== currentTreePath),
     availableBranches,
     compareTarget: {
-      diffTypes: ["branch"],
+      diffTypes: ["branch", "commit-range"],
       fallback: "main",
       picker: {
         rowLabel: "compare against",
@@ -1380,6 +1383,7 @@ const WORKTREE_SUB_TYPES = new Set([
   "unstaged",
   "last-commit",
   "branch",
+  "commit-range",
   "merge-base",
   "all",
 ]);
@@ -1611,13 +1615,19 @@ export async function runGitDiff(
         break;
       }
 
-      case "branch": {
-        // `--end-of-options` hardens against a caller-supplied `defaultBranch`
-        // that starts with `-` being parsed as a git flag (e.g. `--output=...`
-        // would redirect diff output to an attacker-chosen path). Same pattern
-        // applied wherever user-controlled refs flow into a git argv.
+      case "branch":
+      case "commit-range": {
+        // `--end-of-options` hardens against a caller-supplied left ref that
+        // starts with `-`. Commit comparison is stricter still: both refs must
+        // be plain SHAs, never revspec expressions or branch names.
         const compareRef = options?.compareRef || "HEAD";
-        const branchDiffArgs = [
+        if (
+          effectiveDiffType === "commit-range"
+          && (!BARE_HEX_SHA_RE.test(defaultBranch) || !BARE_HEX_SHA_RE.test(compareRef))
+        ) {
+          return { patch: "", label: "Compare commits", error: "Invalid commit SHA" };
+        }
+        const rangeDiffArgs = [
           "diff",
           "--no-ext-diff",
           ...wFlag,
@@ -1626,8 +1636,10 @@ export async function runGitDiff(
           "--end-of-options",
           `${defaultBranch}..${compareRef}`,
         ];
-        patch = await runBoundedTrackedDiff(runtime, branchDiffArgs, cwd);
-        label = `Changes: ${displayRef(defaultBranch)} → ${displayRef(compareRef)}`;
+        patch = await runBoundedTrackedDiff(runtime, rangeDiffArgs, cwd);
+        label = effectiveDiffType === "commit-range"
+          ? `Commits: ${displayRef(defaultBranch)} → ${displayRef(compareRef)}`
+          : `Changes: ${displayRef(defaultBranch)} → ${displayRef(compareRef)}`;
         break;
       }
 
@@ -1885,6 +1897,25 @@ export async function getGitDiffFingerprint(
       return `git:commit:${commitRef.sha}:${resolves ? "present" : "gone"}`;
     }
 
+    if (effectiveDiffType === "commit-range") {
+      const compareRef = options?.compareRef;
+      if (!BARE_HEX_SHA_RE.test(defaultBranch) || !compareRef || !BARE_HEX_SHA_RE.test(compareRef)) {
+        return null;
+      }
+      const [left, right] = await Promise.all([
+        runReadOnlyGit(["rev-parse", "--verify", "--quiet", `${defaultBranch}^{commit}`]),
+        runReadOnlyGit(["rev-parse", "--verify", "--quiet", `${compareRef}^{commit}`]),
+      ]);
+      return [
+        "git",
+        "commit-range",
+        defaultBranch,
+        left.exitCode === 0 ? "present" : "gone",
+        compareRef,
+        right.exitCode === 0 ? "present" : "gone",
+      ].join(":");
+    }
+
     const head = await runReadOnlyGit(["rev-parse", "HEAD"]);
     const headSha = head.exitCode === 0 ? head.stdout.trim() : "no-head";
     const parts = ["git", effectiveDiffType, headSha];
@@ -2054,7 +2085,8 @@ export async function getFileContentsForDiff(
         oldContent: await gitShow("HEAD~1", oldFilePath),
         newContent: await gitShow("HEAD", filePath),
       };
-    case "branch": {
+    case "branch":
+    case "commit-range": {
       const compareRef = options?.compareRef || "HEAD";
       return {
         oldContent: await gitShow(defaultBranch, oldFilePath),

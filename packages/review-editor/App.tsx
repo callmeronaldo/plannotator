@@ -500,10 +500,10 @@ const ReviewApp: React.FC = () => {
   //                   produced "trailing context mismatch" warnings).
   const [selectedBase, setSelectedBase] = useState<string | null>(null);
   const [committedBase, setCommittedBase] = useState<string | null>(null);
-  // Explicit right-hand ref for the two-branch comparison mode. HEAD is used
-  // only for detached-head sessions; normal sessions initialize to the current
-  // branch so the first comparison matches the old branch-vs-HEAD behavior.
+  // Explicit right-hand refs for two-ref comparisons. Branch comparison uses
+  // the current branch; commit comparison initializes from the newest commit.
   const [selectedCompareBranch, setSelectedCompareBranch] = useState<string | null>(null);
+  const [selectedCompareCommit, setSelectedCompareCommit] = useState<string | null>(null);
   // Since-base sections sidecar (committed / changes / untracked grouping).
   const [sections, setSections] = useState<SinceBaseSections | null>(null);
   // Commit metadata sidecar while a commit:<sha> diff is active — drives the
@@ -1244,7 +1244,7 @@ const ReviewApp: React.FC = () => {
       const lastColon = rest.lastIndexOf(':');
       if (lastColon !== -1) {
         const sub = rest.slice(lastColon + 1);
-        if (['since-base', 'uncommitted', 'staged', 'unstaged', 'last-commit', 'branch', 'merge-base', 'all'].includes(sub)) {
+        if (['since-base', 'uncommitted', 'staged', 'unstaged', 'last-commit', 'branch', 'commit-range', 'merge-base', 'all'].includes(sub)) {
           return { activeWorktreePath: rest.slice(0, lastColon), activeDiffBase: sub };
         }
       }
@@ -1726,6 +1726,7 @@ const ReviewApp: React.FC = () => {
         commitInfo?: CommitDiffInfo;
         generatedFiles?: string[];
         compareBranch?: string;
+        compareCommit?: string;
         snapshotId?: string;
         serverConfig?: Record<string, unknown> & { displayName?: string; gitUser?: string };
       }) => {
@@ -1767,6 +1768,7 @@ const ReviewApp: React.FC = () => {
             data.compareBranch ||
             (data.gitContext.currentBranch && data.gitContext.currentBranch !== '(detached)' ? data.gitContext.currentBranch : 'HEAD'),
           );
+          setSelectedCompareCommit(data.compareCommit || data.gitContext.recentCommits?.[0]?.sha || null);
         }
         if (data.agentCwd !== undefined) setAgentCwd(data.agentCwd);
         if (data.sharingEnabled !== undefined) setSharingEnabled(data.sharingEnabled);
@@ -2279,7 +2281,7 @@ const ReviewApp: React.FC = () => {
   // Shared helper: fetch a diff switch and update state.
   // Returns true on success, false on failure — callers that optimistically
   // updated UI state (e.g. the base picker) can use this to revert.
-  const fetchDiffSwitch = useCallback(async (fullDiffType: string, baseOverride?: string, options?: { preserveFile?: boolean; explicitBase?: boolean; compareBranch?: string }): Promise<boolean> => {
+  const fetchDiffSwitch = useCallback(async (fullDiffType: string, baseOverride?: string, options?: { preserveFile?: boolean; explicitBase?: boolean; compareBranch?: string; compareCommit?: string }): Promise<boolean> => {
     setIsLoadingDiff(true);
     try {
       const res = await fetch('/api/diff/switch', {
@@ -2293,8 +2295,11 @@ const ReviewApp: React.FC = () => {
           hideWhitespace: diffHideWhitespace,
           // Preserve the explicit-base marker for older server integrations.
           ...(options?.explicitBase && { explicitBase: true }),
-          ...((options?.compareBranch || (fullDiffType === 'branch' && selectedCompareBranch)) && {
+          ...((options?.compareBranch || ((fullDiffType === 'branch' || fullDiffType.endsWith(':branch')) && selectedCompareBranch)) && {
             compareBranch: options?.compareBranch || selectedCompareBranch,
+          }),
+          ...((options?.compareCommit || ((fullDiffType === 'commit-range' || fullDiffType.endsWith(':commit-range')) && selectedCompareCommit)) && {
+            compareCommit: options?.compareCommit || selectedCompareCommit,
           }),
         }),
       });
@@ -2317,6 +2322,7 @@ const ReviewApp: React.FC = () => {
         commitInfo?: CommitDiffInfo;
         generatedFiles?: string[];
         compareBranch?: string;
+        compareCommit?: string;
         superseded?: boolean;
       };
 
@@ -2340,6 +2346,7 @@ const ReviewApp: React.FC = () => {
       setCommitInfo(data.commitInfo ?? null);
       setGeneratedFiles(new Set(data.generatedFiles ?? []));
       if (data.compareBranch) setSelectedCompareBranch(data.compareBranch);
+      if (data.compareCommit) setSelectedCompareCommit(data.compareCommit);
 
       if (options?.preserveFile) {
         // Whitespace toggle: update patch in-place, keep the active file.
@@ -2413,7 +2420,7 @@ const ReviewApp: React.FC = () => {
     } finally {
       setIsLoadingDiff(false);
     }
-  }, [dockApi, resetStagedFiles, selectedBase, selectedCompareBranch, diffHideWhitespace, files, activeFileIndex, openDiffFile, applySemanticDiffAdvert, applyCallFlowAdvert, clearPendingSelection]);
+  }, [dockApi, resetStagedFiles, selectedBase, selectedCompareBranch, selectedCompareCommit, diffHideWhitespace, files, activeFileIndex, openDiffFile, applySemanticDiffAdvert, applyCallFlowAdvert, clearPendingSelection]);
 
   // Switch Branch 1 in the two-branch comparison. Legacy base-dependent
   // modes still use this handler when an older session restores them.
@@ -2424,15 +2431,16 @@ const ReviewApp: React.FC = () => {
       if (branch === selectedBase) return;
       const previous = selectedBase;
       setSelectedBase(branch);
-      if (activeDiffBase === 'since-base' || activeDiffBase === 'branch' || activeDiffBase === 'merge-base' || activeDiffBase === 'jj-line' || activeDiffBase === 'jj-evolog') {
+      if (activeDiffBase === 'since-base' || activeDiffBase === 'branch' || activeDiffBase === 'commit-range' || activeDiffBase === 'merge-base' || activeDiffBase === 'jj-line' || activeDiffBase === 'jj-evolog') {
         const ok = await fetchDiffSwitch(diffType, branch, {
           explicitBase: true,
           ...(activeDiffBase === 'branch' && selectedCompareBranch ? { compareBranch: selectedCompareBranch } : {}),
+          ...(activeDiffBase === 'commit-range' && selectedCompareCommit ? { compareCommit: selectedCompareCommit } : {}),
         });
         if (!ok) setSelectedBase(previous);
       }
     },
-    [selectedBase, activeDiffBase, diffType, selectedCompareBranch, fetchDiffSwitch],
+    [selectedBase, activeDiffBase, diffType, selectedCompareBranch, selectedCompareCommit, fetchDiffSwitch],
   );
 
   const handleCompareBranchSelect = useCallback(
@@ -2450,7 +2458,28 @@ const ReviewApp: React.FC = () => {
     [selectedCompareBranch, selectedBase, gitContext, fetchDiffSwitch],
   );
 
-  // Switch between the two local review workflows — composes a worktree prefix if active.
+  const handleCompareCommitSelect = useCallback(
+    async (sha: string) => {
+      if (sha === selectedCompareCommit) return;
+      const previous = selectedCompareCommit;
+      setSelectedCompareCommit(sha);
+      const fallbackLeft = gitContext?.recentCommits?.[1]?.sha ?? sha;
+      const base = selectedBase && /^[0-9a-f]{4,64}$/i.test(selectedBase)
+        ? selectedBase
+        : fallbackLeft;
+      const fullDiffType = activeWorktreePath
+        ? `worktree:${activeWorktreePath}:commit-range`
+        : 'commit-range';
+      const ok = await fetchDiffSwitch(fullDiffType, base, {
+        explicitBase: true,
+        compareCommit: sha,
+      });
+      if (!ok) setSelectedCompareCommit(previous);
+    },
+    [selectedCompareCommit, selectedBase, gitContext, activeWorktreePath, fetchDiffSwitch],
+  );
+
+  // Switch between the three local review workflows — composes a worktree prefix if active.
   const handleDiffSwitch = useCallback(async (baseDiffType: string) => {
     const fullDiffType = activeWorktreePath
       ? `worktree:${activeWorktreePath}:${baseDiffType}`
@@ -2462,16 +2491,31 @@ const ReviewApp: React.FC = () => {
     // so other base-dependent modes (jj-line) don't inherit a commit ID.
     const enteringEvolog =
       baseDiffType === 'jj-evolog' && gitContext?.jjEvologs && gitContext.jjEvologs.length >= 2;
+    const enteringCommitRange =
+      baseDiffType === 'commit-range' && gitContext?.recentCommits && gitContext.recentCommits.length >= 2;
+    // Leaving commit comparison must not carry the left SHA into other modes'
+    // base pickers (a branch diff would technically work but the branch
+    // picker would display a bare SHA) — restore the detected default.
+    const leavingCommitRange =
+      !enteringCommitRange && !enteringEvolog && activeDiffBase === 'commit-range' && gitContext?.defaultBranch;
     const leavingEvolog =
-      !enteringEvolog && activeDiffBase === 'jj-evolog' && gitContext?.defaultBranch;
+      !enteringEvolog && !enteringCommitRange && activeDiffBase === 'jj-evolog' && gitContext?.defaultBranch;
     const baseOverride = enteringEvolog
       ? gitContext!.jjEvologs![1].commitId
-      : leavingEvolog
-        ? gitContext!.defaultBranch
-        : undefined;
+      : enteringCommitRange
+        ? gitContext!.recentCommits![1].sha
+        : leavingEvolog || leavingCommitRange
+          ? gitContext!.defaultBranch
+          : undefined;
     if (baseOverride) setSelectedBase(baseOverride);
+    if (enteringCommitRange) {
+      const compareCommit = gitContext!.recentCommits![0].sha;
+      setSelectedCompareCommit(compareCommit);
+      await fetchDiffSwitch(fullDiffType, baseOverride, { compareCommit, explicitBase: true });
+      return;
+    }
     await fetchDiffSwitch(fullDiffType, baseOverride);
-  }, [diffType, activeWorktreePath, fetchDiffSwitch, gitContext]);
+  }, [diffType, activeWorktreePath, activeDiffBase, fetchDiffSwitch, gitContext]);
 
   // Toggling to Sections means "show me the since-base review" — if another
   // mode is active, switch the LIVE diff back along with the view. No writes
@@ -4219,6 +4263,8 @@ const ReviewApp: React.FC = () => {
                 onSelectBase={prMetadata ? undefined : (base) => completeNavigatorSelection(() => handleBaseSelect(base))}
                 selectedCompareBranch={prMetadata ? undefined : selectedCompareBranch ?? undefined}
                 onSelectCompareBranch={prMetadata ? undefined : (branch) => completeNavigatorSelection(() => handleCompareBranchSelect(branch))}
+                selectedCompareCommit={prMetadata ? undefined : selectedCompareCommit ?? undefined}
+                onSelectCompareCommit={prMetadata ? undefined : (sha) => completeNavigatorSelection(() => handleCompareCommitSelect(sha))}
                 compareTarget={gitContext?.compareTarget}
                 recentCommits={prMetadata ? undefined : gitContext?.recentCommits}
                 jjEvologs={prMetadata ? undefined : gitContext?.jjEvologs}

@@ -13,6 +13,7 @@ import type { FileTreeNode } from '../utils/buildFileTree';
 import { FileTreeNodeItem } from './FileTreeNode';
 import { BaseBranchPicker } from './BaseBranchPicker';
 import { BranchComparePicker } from './BranchComparePicker';
+import { CommitComparePicker } from './CommitComparePicker';
 import { EvoLogPicker } from './EvoLogPicker';
 import { DiffTypePicker } from './DiffTypePicker';
 import { WorktreePicker } from './WorktreePicker';
@@ -55,8 +56,10 @@ interface FileTreeProps {
   onSelectBase?: (branch: string) => void;
   selectedCompareBranch?: string;
   onSelectCompareBranch?: (branch: string) => void;
+  selectedCompareCommit?: string;
+  onSelectCompareCommit?: (sha: string) => void;
   compareTarget?: CompareTargetConfig;
-  /** HEAD ancestry for the commit-baseline picker (git only, #709). */
+  /** HEAD ancestry for commit selection (git only). */
   recentCommits?: RecentCommit[];
   /** Evolution log entries for the current jj change (jj-evolog mode only). */
   jjEvologs?: JjEvoLogEntry[];
@@ -153,6 +156,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onSelectBase,
   selectedCompareBranch,
   onSelectCompareBranch,
+  selectedCompareCommit,
+  onSelectCompareCommit,
   compareTarget,
   recentCommits,
   jjEvologs,
@@ -438,8 +443,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
           </div>
         )}
 
-      {/* Native two-ref selector for branch comparison; the legacy picker remains
-          available only to non-Git integrations that still expose it. */}
+      {/* Native two-ref selectors for explicit branch/commit comparison; the
+          legacy picker remains available to integrations with one base ref. */}
       {activeDiffType === 'branch' &&
         availableBranches &&
         selectedBase &&
@@ -454,7 +459,22 @@ export const FileTree: React.FC<FileTreeProps> = ({
             onSelectRight={onSelectCompareBranch}
             disabled={isLoadingDiff}
           />
+        ) : activeDiffType === 'commit-range' &&
+          recentCommits &&
+          selectedBase &&
+          selectedCompareCommit &&
+          onSelectBase &&
+          onSelectCompareCommit ? (
+          <CommitComparePicker
+            commits={recentCommits}
+            leftCommit={selectedBase}
+            rightCommit={selectedCompareCommit}
+            onSelectLeft={onSelectBase}
+            onSelectRight={onSelectCompareCommit}
+            disabled={isLoadingDiff}
+          />
         ) : activeDiffType !== 'jj-evolog' &&
+          activeDiffType !== 'commit-range' &&
           onSelectBase &&
           selectedBase &&
           detectedBase &&

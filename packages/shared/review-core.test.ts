@@ -1478,6 +1478,47 @@ describe("review-core", () => {
     expect(contents).toEqual({ oldContent: "before\n", newContent: "feature\n" });
   });
 
+  test("commit-range compares two immutable commits and expands from the same refs", async () => {
+    const repoDir = initRepo();
+    const runtime = makeRuntime(repoDir);
+    const left = git(repoDir, ["rev-parse", "HEAD"]);
+    writeFileSync(join(repoDir, "tracked.txt"), "commit two\n", "utf-8");
+    git(repoDir, ["add", "tracked.txt"]);
+    git(repoDir, ["commit", "-m", "commit two"]);
+    const right = git(repoDir, ["rev-parse", "HEAD"]);
+
+    const result = await runGitDiff(runtime, "commit-range", left, repoDir, { compareRef: right });
+
+    expect(result.label).toContain(`Commits: ${left.slice(0, 7)} → ${right.slice(0, 7)}`);
+    expect(result.patch).toContain("-before");
+    expect(result.patch).toContain("+commit two");
+    expect(await getFileContentsForDiff(
+      runtime,
+      "commit-range",
+      left,
+      "tracked.txt",
+      undefined,
+      repoDir,
+      { compareRef: right },
+    )).toEqual({ oldContent: "before\n", newContent: "commit two\n" });
+
+    const context = await getGitContext(runtime, repoDir);
+    expect(context.diffOptions.map((option) => option.id)).toEqual([
+      "uncommitted",
+      "branch",
+      "commit-range",
+    ]);
+  });
+
+  test("commit-range rejects non-SHA refs", async () => {
+    const repoDir = initRepo();
+    const runtime = makeRuntime(repoDir);
+
+    const result = await runGitDiff(runtime, "commit-range", "main", repoDir, { compareRef: "HEAD" });
+
+    expect(result).toEqual({ patch: "", label: "Compare commits", error: "Invalid commit SHA" });
+  });
+
   test("git context lists worktrees and file content lookup returns old/new content", async () => {
     const repoDir = initRepo();
     const runtime = makeRuntime(repoDir);

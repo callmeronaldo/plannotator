@@ -369,8 +369,13 @@ export async function startReviewServer(
   let currentCompareBranch = gitContext?.currentBranch && gitContext.currentBranch !== "(detached)"
     ? gitContext.currentBranch
     : "HEAD";
-  const branchDiffOptions = (diffType: string = currentDiffType as string) =>
-    diffType === "branch" ? { compareRef: currentCompareBranch } : {};
+  let currentCompareCommit = gitContext?.recentCommits?.[0]?.sha ?? "HEAD";
+  const comparisonDiffOptions = (diffType: string = currentDiffType as string) => {
+    const effective = parseWorktreeDiffType(diffType)?.subType ?? diffType;
+    if (effective === "branch") return { compareRef: currentCompareBranch };
+    if (effective === "commit-range") return { compareRef: currentCompareCommit };
+    return {};
+  };
   const isGitButlerCommittedView = (diffType: string = currentDiffType as string): boolean =>
     diffType.startsWith("gitbutler:stack:") || diffType.startsWith("gitbutler:branch:");
   // --- PR local checkout resolution -----------------------------------------
@@ -466,7 +471,7 @@ export async function startReviewServer(
       if (!hasLocalAccess) return null;
       return await getVcsDiffFingerprint(currentDiffType as DiffType, currentBase, gitContext?.cwd, {
         hideWhitespace: currentHideWhitespace,
-        ...branchDiffOptions(),
+        ...comparisonDiffOptions(),
       });
     } catch {
       return null;
@@ -1746,6 +1751,7 @@ export async function startReviewServer(
             const servedError = currentError;
             const servedDiffType = currentDiffType;
             const servedCompareBranch = currentCompareBranch;
+            const servedCompareCommit = currentCompareCommit;
             const servedHideWhitespace = currentHideWhitespace;
             const servedPRDiffScope = currentPRDiffScope;
             const servedSnapshotId = currentSnapshotId();
@@ -1767,6 +1773,7 @@ export async function startReviewServer(
               // detected default.
               base: hasLocalAccess ? servedBase : undefined,
               ...(hasLocalAccess && servedDiffType === "branch" ? { compareBranch: servedCompareBranch } : {}),
+              ...(hasLocalAccess && servedDiffType === "commit-range" ? { compareCommit: servedCompareCommit } : {}),
               hideWhitespace: servedHideWhitespace,
               ...(workspace && { diffOptions: workspace.diffOptions }),
               gitContext: hasLocalAccess ? servedGitContext : undefined,
@@ -2051,6 +2058,7 @@ export async function startReviewServer(
                 diffType: DiffType | WorkspaceDiffType;
                 base?: string;
                 compareBranch?: string;
+                compareCommit?: string;
                 hideWhitespace?: boolean;
                 explicitBase?: boolean;
               };
@@ -2115,17 +2123,31 @@ export async function startReviewServer(
               const requestedBase = typeof body.base === "string" ? body.base : undefined;
               const base = resolveReviewBase(requestedBase);
               const defaultCwd = gitContext?.cwd;
+              const effectiveNewDiffType = parseWorktreeDiffType(newDiffType as string)?.subType ?? newDiffType;
               const requestedCompareBranch = typeof body.compareBranch === "string" && body.compareBranch
                 ? body.compareBranch
                 : undefined;
-              const nextCompareBranch = newDiffType === "branch"
+              const nextCompareBranch = effectiveNewDiffType === "branch"
                 ? requestedCompareBranch ?? currentCompareBranch
                 : currentCompareBranch;
+              const requestedCompareCommit = typeof body.compareCommit === "string" && body.compareCommit
+                ? body.compareCommit
+                : undefined;
+              const nextCompareCommit = effectiveNewDiffType === "commit-range"
+                ? requestedCompareCommit ?? currentCompareCommit
+                : currentCompareCommit;
+              if (
+                effectiveNewDiffType === "commit-range"
+                && (!parseCommitDiffType(`commit:${base}`) || !parseCommitDiffType(`commit:${nextCompareCommit}`))
+              ) {
+                return Response.json({ error: "Invalid commit SHA" }, { status: 400 });
+              }
 
               // Run the new diff
               const result = await runVcsDiff(newDiffType as DiffType, base, defaultCwd, {
                 hideWhitespace: effectiveHideWhitespace,
-                ...(newDiffType === "branch" ? { compareRef: nextCompareBranch } : {}),
+                ...(effectiveNewDiffType === "branch" ? { compareRef: nextCompareBranch } : {}),
+                ...(effectiveNewDiffType === "commit-range" ? { compareRef: nextCompareCommit } : {}),
               });
               const resultContext = sessionVcsType === "gitbutler" && result.gitContext?.vcsType === "gitbutler"
                 ? result.gitContext
@@ -2189,7 +2211,8 @@ export async function startReviewServer(
               currentGitRef = result.label;
               currentDiffType = newDiffType;
               currentBase = nextBase;
-              if (newDiffType === "branch") currentCompareBranch = nextCompareBranch;
+              if (effectiveNewDiffType === "branch") currentCompareBranch = nextCompareBranch;
+              if (effectiveNewDiffType === "commit-range") currentCompareCommit = nextCompareCommit;
               currentError = result.error;
               draftKey = contentHash(currentPatch);
               if (updatedContext && sessionVcsType === "gitbutler") {
@@ -2210,7 +2233,8 @@ export async function startReviewServer(
                 // confirm the request landed (and pick it up when the client
                 // didn't supply one and we fell back to detected default).
                 base: currentBase,
-                ...(currentDiffType === "branch" ? { compareBranch: currentCompareBranch } : {}),
+                ...(effectiveNewDiffType === "branch" ? { compareBranch: currentCompareBranch } : {}),
+                ...(effectiveNewDiffType === "commit-range" ? { compareCommit: currentCompareCommit } : {}),
                 hideWhitespace: currentHideWhitespace,
                 ...(sections && { sections }),
                 ...(commitInfo && { commitInfo }),
@@ -2706,7 +2730,7 @@ export async function startReviewServer(
                 filePath,
                 oldPath,
                 defaultCwd,
-                branchDiffOptions(),
+                comparisonDiffOptions(),
               );
               return Response.json(result);
             }

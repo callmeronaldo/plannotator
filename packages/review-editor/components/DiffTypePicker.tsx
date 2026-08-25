@@ -31,6 +31,7 @@ const OPTION_HINTS: Record<string, string> = {
   'jj-evolog': "What changed between two evolutions of the current change — shows what you amended.",
   'jj-all': "Every tracked file in the current jj workspace, shown as additions.",
   branch: "Compare the two branches selected below.",
+  'commit-range': "Compare the two immutable commits selected below.",
   'merge-base': "Only what you've added on top of the base branch (picked below). Same as GitHub's PR view.",
   all: "Every tracked file at HEAD, shown as additions. Unlike Committed, which shows what changed vs a base branch, this shows the entire codebase.",
 };
