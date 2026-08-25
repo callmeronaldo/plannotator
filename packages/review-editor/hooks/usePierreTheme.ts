@@ -258,6 +258,15 @@ export function usePierreTheme(options?: {
             --diffs-light-bg: ${bg};
             --diffs-dark: ${fg};
             --diffs-light: ${fg};
+            /* Pierre's own fallback chain (SF Mono → … → Courier New) misses on
+               Linux, dropping the code pane to DejaVu while the gutter divs
+               (not inside pre/code) inherit the host's sans font. Follow the
+               app theme's mono stack instead — it inherits into the shadow DOM
+               and resolves to the bundled Geist Mono by default. */
+            --diffs-font-family: var(--font-mono, ui-monospace, monospace);
+          }
+          pre, code, [data-column-number], [data-line-content] {
+            font-family: var(--diffs-font-family, var(--font-mono, monospace)) !important;
           }
           pre, code { background-color: ${bg} !important; }
           [data-file-info] { background-color: ${muted} !important; }
