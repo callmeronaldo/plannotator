@@ -84,8 +84,8 @@ export interface ReviewState {
   ) => boolean;
   onAddAnnotation: (type: CodeAnnotationType, text?: string, suggestedCode?: string, originalCode?: string, conventionalLabel?: ConventionalLabel, decorations?: ConventionalDecoration[], tokenMeta?: TokenAnnotationMeta) => void;
   onAddAnnotationForFile: (filePath: string, type: CodeAnnotationType, text?: string, suggestedCode?: string, originalCode?: string, conventionalLabel?: ConventionalLabel, decorations?: ConventionalDecoration[], tokenMeta?: TokenAnnotationMeta) => void;
-  /** EXPERIMENTAL edit-to-suggestion flag (cookie setting, default OFF). Only
-   * the plain all-files panel consumes it — Guided Review surfaces stay off. */
+  /** EXPERIMENTAL edit-to-suggestion flag (cookie setting, default OFF).
+   * Review workspace diff panels consume it; Guided Review surfaces stay off. */
   editSuggestionsEnabled: boolean;
   /** Sink for suggestions derived from a completed edit session (one hunk per
    * contiguous changed region; becomes normal suggestion annotations). */

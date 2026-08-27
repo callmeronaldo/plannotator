@@ -315,13 +315,13 @@ export interface AllFilesCodeViewProps {
    * See adr/decisions/007-portable-guided-reviews-20260815.md (D2, D4).
    */
   readOnly?: boolean;
-  /** EXPERIMENTAL flag-gated edit-to-suggestion mode. Only the plain all-files
-   * dock panel passes this — Guided Review surfaces deliberately do NOT (the
+  /** EXPERIMENTAL flag-gated edit-to-suggestion mode. Review workspace diff
+   * panels may pass this; Guided Review surfaces deliberately do NOT (the
    * GuideViewportManager evicts CodeViews beyond ~8 mounted, which would
    * destroy an active editor's state; scoping edit mode to this surface is the
    * simple safe v1 choice). When absent/false, no edit UI renders and no
    * editor is ever constructed (code-split hosts also never fetch the editor
-   * chunk; the single-file build inlines it, functionally inert). */
+   * chunk). */
   enableEditSuggestions?: boolean;
   /** Sink for suggestions derived from a completed edit session. Required for
    * edit mode to activate. */

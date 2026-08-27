@@ -133,4 +133,14 @@ describe.if(hasDom)('header control visibility (DOM)', () => {
     expect(el.querySelector(VIEWED_BUTTON)).not.toBeNull();
   });
 
+  test('focused-file edit mode exposes the Edit entry point', async () => {
+    const el = await render(
+      view({ enableEditSuggestions: true, onAddSuggestionsForFile: () => {} }, () => {}),
+    );
+
+    // Sentinel for the focused-file threading: without the new DiffViewer
+    // adapter FileHeader receives no edit callback and renders no entry point.
+    expect(el.querySelector('button[title*="Edit this file"]')).not.toBeNull();
+  });
+
 });

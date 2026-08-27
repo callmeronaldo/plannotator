@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
-import { FileDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
+import { EditProvider, FileDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
 import { getSingularPatch, processFile } from '@pierre/diffs';
 import { DiffOverviewRuler, buildDiffOverviewMarks } from './DiffOverviewRuler';
 import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, DiffAnnotationMetadata, TokenAnnotationMeta, ConventionalLabel, ConventionalDecoration } from '@plannotator/ui/types';
@@ -39,9 +39,15 @@ import {
   resolveLineSelectionBehavior,
   type LineSelectionSource,
 } from '../utils/lineSelectionBehavior';
+import { EditSessionHud } from './EditSessionHud';
+import { useSingleFileEditSession } from '../edit/useSingleFileEditSession';
+import type { SuggestionHunk } from '../edit/deriveSuggestions';
+import type { EditSelectionAnnotationRequest, EditSelectionComment } from '../edit/useEditSession';
+import type { PierreEditorOptions } from '../edit/pierreEditAdapter';
 
 interface PierreDiffContentProps {
   filePath: string;
+  renderVersion: number;
   fileDiff: ReturnType<typeof getSingularPatch>;
   pierreTheme: { type: 'dark' | 'light'; css: string; syntaxTheme?: { dark: string; light: string } };
   diffStyle: 'split' | 'unified';
@@ -63,10 +69,13 @@ interface PierreDiffContentProps {
   onTokenClick?: (props: DiffTokenEventBaseProps, event: MouseEvent) => void;
   onTokenEnter?: (props: DiffTokenEventBaseProps, event: PointerEvent) => void;
   onTokenLeave?: (props: DiffTokenEventBaseProps, event: PointerEvent) => void;
+  edit?: boolean;
+  editorOptions?: PierreEditorOptions;
 }
 
 const PierreDiffContent = React.memo(({
   filePath,
+  renderVersion,
   fileDiff,
   pierreTheme,
   diffStyle,
@@ -85,10 +94,12 @@ const PierreDiffContent = React.memo(({
   onTokenClick,
   onTokenEnter,
   onTokenLeave,
+  edit,
+  editorOptions,
 }: PierreDiffContentProps) => {
   return (
-    <FileDiff
-      key={filePath}
+    <FileDiff<DiffAnnotationMetadata>
+      key={`${filePath}:${renderVersion}`}
       fileDiff={fileDiff}
       options={{
         themeType: pierreTheme.type,
@@ -128,10 +139,13 @@ const PierreDiffContent = React.memo(({
       lineAnnotations={mergedAnnotations}
       selectedLines={pendingSelection || undefined}
       renderAnnotation={renderAnnotation}
+      edit={edit}
+      editorOptions={editorOptions}
     />
   );
 }, (prev, next) => (
   prev.filePath === next.filePath &&
+  prev.renderVersion === next.renderVersion &&
   prev.fileDiff === next.fileDiff &&
   prev.pierreTheme.type === next.pierreTheme.type &&
   prev.pierreTheme.css === next.pierreTheme.css &&
@@ -152,7 +166,9 @@ const PierreDiffContent = React.memo(({
   prev.renderAnnotation === next.renderAnnotation &&
   prev.onTokenClick === next.onTokenClick &&
   prev.onTokenEnter === next.onTokenEnter &&
-  prev.onTokenLeave === next.onTokenLeave
+  prev.onTokenLeave === next.onTokenLeave &&
+  prev.edit === next.edit &&
+  prev.editorOptions === next.editorOptions
 ));
 
 interface DiffViewerProps {
@@ -221,6 +237,10 @@ interface DiffViewerProps {
   onClickAIMarker?: (questionId: string) => void;
   /** AI messages overlapping the current pending selection */
   aiHistoryMessages?: AIChatEntry[];
+  /** EXPERIMENTAL edit-to-suggestion support for the focused-file tab. */
+  enableEditSuggestions?: boolean;
+  onAddSuggestionsForFile?: (filePath: string, hunks: SuggestionHunk[]) => void;
+  onAddEditorCommentForFile?: (filePath: string, comment: EditSelectionComment) => void;
   // Code navigation
   onCodeNavRequest?: (request: import('@plannotator/shared/code-nav').CodeNavRequest) => void;
 }
@@ -278,6 +298,9 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   aiMessages = [],
   onClickAIMarker,
   aiHistoryMessages = [],
+  enableEditSuggestions = false,
+  onAddSuggestionsForFile,
+  onAddEditorCommentForFile,
   onCodeNavRequest,
 }) => {
   const pierreTheme = usePierreTheme({ fontFamily, fontSize, compactTouchLayout });
@@ -293,6 +316,8 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   const splitSurfaceRef = useRef<HTMLDivElement>(null);
   const diffContentRef = useRef<HTMLDivElement>(null);
   const [fileCommentAnchor, setFileCommentAnchor] = useState<HTMLElement | null>(null);
+  const [selectionAnnotationRequest, setSelectionAnnotationRequest] =
+    useState<EditSelectionAnnotationRequest | null>(null);
 
   // Resizable split pane — only applies when Pierre renders a two-column grid
   // (files with both additions and deletions). Add-only or delete-only files
@@ -423,11 +448,27 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     }
   }, [patch, filePath, oldPath, fileContents, fileDiff]);
 
+  const editEnabled = enableEditSuggestions && onAddSuggestionsForFile != null;
+  const editGeneration = `${filePath}:${hashString(patch)}:${reviewBase ?? ''}:${reviewSnapshotId ?? ''}`;
+  const editSession = useSingleFileEditSession({
+    enabled: editEnabled,
+    file: { path: filePath, oldPath, patch, status: status ?? 'modified' },
+    fileDiff: augmentedDiff,
+    generation: editGeneration,
+    reviewBase,
+    reviewSnapshotId,
+    onAddSuggestions: onAddSuggestionsForFile,
+    onSelectionAnnotation: onAddEditorCommentForFile ? setSelectionAnnotationRequest : undefined,
+  });
+  const renderedDiff = editSession.editableDiff ?? augmentedDiff;
+
   // Hydrated hunks carry cumulative rendered-row starts, including expanded
   // unchanged gaps, so these marks remain aligned after full-content loading.
+  // The editor mutates its private clone in place, so hide stale marks during
+  // the session and restore the pristine overview when it ends.
   const overviewMarks = useMemo(
-    () => buildDiffOverviewMarks(augmentedDiff, diffStyle),
-    [augmentedDiff, diffStyle],
+    () => editSession.editing ? [] : buildDiffOverviewMarks(augmentedDiff, diffStyle),
+    [augmentedDiff, diffStyle, editSession.editing],
   );
 
   const previousScrollFilePathRef = useRef(filePath);
@@ -776,6 +817,34 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     return lineRangeForAnnotation(ann);
   }, [selectedAnnotationId, annotations]);
 
+  const pierreDiffContent = (
+    <PierreDiffContent
+      filePath={filePath}
+      renderVersion={editEnabled ? editSession.renderVersion : 0}
+      fileDiff={renderedDiff}
+      pierreTheme={pierreTheme}
+      diffStyle={diffStyle}
+      diffOverflow={diffOverflow}
+      diffIndicators={diffIndicators}
+      lineDiffType={lineDiffType}
+      disableLineNumbers={disableLineNumbers}
+      disableBackground={disableBackground}
+      expandUnchanged={expandUnchanged}
+      mergedAnnotations={mergedAnnotations}
+      pendingSelection={pendingSelection ?? selectedAnnotationRange}
+      onLineSelectionEnd={handlePierreLineSelectionEnd}
+      onLineSelectionChange={compactTouchLayout ? handlePierreLineSelectionChange : undefined}
+      onGutterUtilityClick={handleGutterUtilityClick}
+      renderAnnotation={renderAnnotation}
+      onTokenClick={handleTokenClick}
+      onTokenEnter={handleTokenEnter}
+      onTokenLeave={handleTokenLeave}
+      edit={editEnabled ? editSession.editing : undefined}
+      editorOptions={editEnabled ? editSession.editorOptions : undefined}
+    />
+  );
+  const overviewGutterReserved = !compactTouchLayout;
+
   return (
     <div className="h-full flex flex-col">
       <FileHeader
@@ -806,12 +875,23 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         showStageControl={showStageControls}
         stageError={stageError}
         onFileComment={setFileCommentAnchor}
+        onEditFile={editEnabled ? editSession.startEdit : undefined}
+        isEditing={editSession.editing}
+        editDisabledReason={editSession.editDisabledReason}
       />
+
+      {editSession.editing && (
+        <EditSessionHud
+          onComplete={editSession.completeEdit}
+          onCancel={editSession.cancelEdit}
+          dirtyStore={editSession.dirtyStore}
+        />
+      )}
 
       {!collapsed && (
         <div className={`flex-1 min-h-0 relative ${isDraggingSplit ? 'select-none' : ''}`}>
           <OverlayScrollArea
-            className={`absolute inset-y-0 left-0 ${overviewMarks.length ? 'right-3.5' : 'right-0'}`}
+            className={`absolute inset-y-0 left-0 ${overviewGutterReserved ? 'right-3.5' : 'right-0'}`}
             overflowX="scroll"
             overflowY="auto"
             onViewportReady={onViewportReady}
@@ -839,27 +919,11 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
                 <div className="pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-border transition-[width,background-color] group-hover:w-0.5 group-hover:bg-primary/50 group-active:w-0.5 group-active:bg-primary/70" />
               </div>
             )}
-            <PierreDiffContent
-              filePath={filePath}
-              fileDiff={augmentedDiff}
-              pierreTheme={pierreTheme}
-              diffStyle={diffStyle}
-              diffOverflow={diffOverflow}
-              diffIndicators={diffIndicators}
-              lineDiffType={lineDiffType}
-              disableLineNumbers={disableLineNumbers}
-              disableBackground={disableBackground}
-              expandUnchanged={expandUnchanged}
-              mergedAnnotations={mergedAnnotations}
-              pendingSelection={pendingSelection ?? selectedAnnotationRange}
-              onLineSelectionEnd={handlePierreLineSelectionEnd}
-              onLineSelectionChange={compactTouchLayout ? handlePierreLineSelectionChange : undefined}
-              onGutterUtilityClick={handleGutterUtilityClick}
-              renderAnnotation={renderAnnotation}
-              onTokenClick={handleTokenClick}
-              onTokenEnter={handleTokenEnter}
-              onTokenLeave={handleTokenLeave}
-            />
+            {editEnabled ? (
+              <EditProvider createEditor={editSession.createEditor}>
+                {pierreDiffContent}
+              </EditProvider>
+            ) : pierreDiffContent}
           </div>
         </div>
 
@@ -891,8 +955,30 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
           onClose={() => setFileCommentAnchor(null)}
         />
       )}
+
+      {selectionAnnotationRequest && onAddEditorCommentForFile && (
+        <CommentPopover
+          key={`edit-selection:${selectionAnnotationRequest.filePath}:${selectionAnnotationRequest.lineStart}-${selectionAnnotationRequest.lineEnd}`}
+          anchorRect={selectionAnnotationRequest.anchorRect}
+          contextText={selectionAnnotationRequest.selectedText.replace(/\s+/g, ' ').trim()}
+          isGlobal={false}
+          allowImages={false}
+          onSubmit={(text) => {
+            onAddEditorCommentForFile(selectionAnnotationRequest.filePath, {
+              lineStart: selectionAnnotationRequest.lineStart,
+              lineEnd: selectionAnnotationRequest.lineEnd,
+              exact: selectionAnnotationRequest.exact,
+              selectedText: selectionAnnotationRequest.selectedText,
+              text,
+            });
+            editSession.collapseSelection();
+            setSelectionAnnotationRequest(null);
+          }}
+          onClose={() => setSelectionAnnotationRequest(null)}
+        />
+      )}
       </OverlayScrollArea>
-          {!compactTouchLayout && overviewMarks.length > 0 && (
+          {overviewGutterReserved && overviewMarks.length > 0 && (
             <DiffOverviewRuler viewport={viewport ?? null} marks={overviewMarks} />
           )}
         </div>
