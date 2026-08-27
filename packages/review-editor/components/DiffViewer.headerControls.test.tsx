@@ -163,4 +163,20 @@ describe.if(hasDom)('header control visibility (DOM)', () => {
     expect(el.querySelector('button[aria-label="Next diff block"]')).not.toBeNull();
   });
 
+  test('Mod+F opens current-file find in the focused diff tab', async () => {
+    const el = await render(view({ isFocused: true }, () => {}));
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: 'f',
+    });
+
+    await act(async () => window.dispatchEvent(event));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(el.querySelector('[data-file-find-widget]')).not.toBeNull();
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Find in current file');
+  });
+
 });

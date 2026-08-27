@@ -27,7 +27,7 @@ import { hashString } from '../utils/hashString';
 import { InlineAnnotation } from './InlineAnnotation';
 import { InlineAIMarker } from './InlineAIMarker';
 import type { AIChatEntry } from '../hooks/useAIChat';
-import { type ReviewSearchMatch } from '../utils/reviewSearch';
+import { findReviewSearchMatches, type ReviewSearchMatch } from '../utils/reviewSearch';
 import {
   applySearchHighlights,
   clearSearchHighlights,
@@ -41,10 +41,12 @@ import {
 } from '../utils/lineSelectionBehavior';
 import { EditSessionHud } from './EditSessionHud';
 import { DiffHunkNavigator } from './DiffHunkNavigator';
+import { FileFindWidget } from './FileFindWidget';
 import { useSingleFileEditSession } from '../edit/useSingleFileEditSession';
 import type { SuggestionHunk } from '../edit/deriveSuggestions';
 import type { EditSelectionAnnotationRequest, EditSelectionComment } from '../edit/useEditSession';
 import type { PierreEditorOptions } from '../edit/pierreEditAdapter';
+import { isReviewCurrentFileSearchShortcut } from '../hooks/useReviewSearch';
 
 interface PierreDiffContentProps {
   filePath: string;
@@ -320,6 +322,9 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   const [fileCommentAnchor, setFileCommentAnchor] = useState<HTMLElement | null>(null);
   const [selectionAnnotationRequest, setSelectionAnnotationRequest] =
     useState<EditSelectionAnnotationRequest | null>(null);
+  const [isFileFindOpen, setIsFileFindOpen] = useState(false);
+  const [fileFindQuery, setFileFindQuery] = useState('');
+  const [activeFileFindIndex, setActiveFileFindIndex] = useState(0);
 
   // Resizable split pane — only applies when Pierre renders a two-column grid
   // (files with both additions and deletions). Add-only or delete-only files
@@ -473,6 +478,73 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     [augmentedDiff, diffStyle, editSession.editing],
   );
 
+  const fileFindMatches = useMemo(
+    () => findReviewSearchMatches(
+      [{ path: filePath, oldPath, patch, additions: 0, deletions: 0 }],
+      fileFindQuery,
+    ),
+    [fileFindQuery, filePath, oldPath, patch],
+  );
+  const safeFileFindIndex = fileFindMatches.length > 0
+    ? Math.min(activeFileFindIndex, fileFindMatches.length - 1)
+    : 0;
+  const activeFileFindMatch = fileFindMatches[safeFileFindIndex] ?? null;
+  const effectiveSearchQuery = isFileFindOpen ? fileFindQuery : searchQuery;
+  const effectiveSearchMatches = isFileFindOpen ? fileFindMatches : searchMatches;
+  const effectiveActiveSearchMatchId = isFileFindOpen
+    ? activeFileFindMatch?.id ?? null
+    : activeSearchMatchId;
+  const effectiveActiveSearchMatch = isFileFindOpen
+    ? activeFileFindMatch
+    : activeSearchMatch;
+
+  const closeFileFind = useCallback(() => {
+    setIsFileFindOpen(false);
+    setFileFindQuery('');
+    setActiveFileFindIndex(0);
+  }, []);
+  const stepFileFind = useCallback((direction: -1 | 1) => {
+    if (fileFindMatches.length === 0) return;
+    setActiveFileFindIndex((current) =>
+      (Math.min(current, fileFindMatches.length - 1) + direction + fileFindMatches.length)
+        % fileFindMatches.length,
+    );
+  }, [fileFindMatches.length]);
+
+  useEffect(() => {
+    if (!isFocused || editSession.editing) {
+      if (isFileFindOpen) closeFileFind();
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isReviewCurrentFileSearchShortcut(event)) {
+        const target = event.target;
+        const isOtherEditor = target instanceof HTMLElement
+          && target.matches('input, textarea, [contenteditable="true"]')
+          && !target.closest('[data-file-find-widget]');
+        if (isOtherEditor) return;
+        event.preventDefault();
+        setIsFileFindOpen(true);
+        if (target instanceof HTMLInputElement && target.closest('[data-file-find-widget]')) {
+          target.select();
+        }
+        return;
+      }
+      if (!isFileFindOpen) return;
+      if (event.key === 'F3') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        stepFileFind(event.shiftKey ? -1 : 1);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeFileFind();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [closeFileFind, editSession.editing, isFileFindOpen, isFocused, stepFileFind]);
+
   const previousScrollFilePathRef = useRef(filePath);
   useLayoutEffect(() => {
     if (previousScrollFilePathRef.current === filePath) return;
@@ -553,14 +625,15 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     return () => clearTimeout(timeoutId);
   }, [scrollTargetAnnotation, viewport]);
 
-  // Apply search highlights to diff lines (including inside shadow DOM).
-  // The query is already debounced upstream (useReviewSearch), so this runs synchronously.
+  // Apply global or current-file search highlights to diff lines (including
+  // inside shadow DOM). Global search is debounced upstream; local find is
+  // intentionally immediate because its index is bounded to this one patch.
   // activeSearchMatchId is NOT in deps — the swap effect handles that with O(1) updates.
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const query = searchQuery;
-    const matches = searchMatches;
+    const query = effectiveSearchQuery;
+    const matches = effectiveSearchMatches;
 
     if (!query.trim() || matches.length === 0) {
       const roots = getSearchRoots(containerRef.current);
@@ -570,22 +643,22 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
 
     const roots = getSearchRoots(containerRef.current);
     roots.forEach(root =>
-      applySearchHighlights(root, query, matches, activeSearchMatchId)
+      applySearchHighlights(root, query, matches, effectiveActiveSearchMatchId)
     );
-  }, [searchQuery, searchMatches, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, augmentedDiff, viewport]);
+  }, [effectiveSearchQuery, effectiveSearchMatches, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, augmentedDiff, viewport]);
 
   // Swap active search highlight instantly when stepping between matches.
   // This avoids a full rebuild just to change two elements' background color.
   useEffect(() => {
     if (!containerRef.current) return;
-    swapActiveSearchHighlight(containerRef.current, activeSearchMatchId);
-  }, [activeSearchMatchId, viewport]);
+    swapActiveSearchHighlight(containerRef.current, effectiveActiveSearchMatchId);
+  }, [effectiveActiveSearchMatchId, viewport]);
 
   // Scroll to active search match (with retry for lazy-rendered content)
   useEffect(() => {
-    if (!activeSearchMatch || !containerRef.current) return;
-    return retryScrollToSearchMatch(containerRef.current, activeSearchMatch);
-  }, [activeSearchMatch, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, viewport]);
+    if (!effectiveActiveSearchMatch || !containerRef.current) return;
+    return retryScrollToSearchMatch(containerRef.current, effectiveActiveSearchMatch);
+  }, [effectiveActiveSearchMatch, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, viewport]);
 
   // Scroll to the selected line range — drives "jump to entity" from semantic-diff
   // clicks and AI "scroll to lines". Mirrors the scroll-to-annotation behavior used
@@ -851,7 +924,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   const overviewGutterReserved = !compactTouchLayout;
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="relative h-full flex flex-col">
       <FileHeader
         filePath={filePath}
         patch={patch}
@@ -889,6 +962,20 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
             : undefined
         }
       />
+
+      {isFileFindOpen && (
+        <FileFindWidget
+          query={fileFindQuery}
+          matchCount={fileFindMatches.length}
+          activeIndex={safeFileFindIndex}
+          onQueryChange={(query) => {
+            setFileFindQuery(query);
+            setActiveFileFindIndex(0);
+          }}
+          onStep={stepFileFind}
+          onClose={closeFileFind}
+        />
+      )}
 
       {editSession.editing && (
         <EditSessionHud

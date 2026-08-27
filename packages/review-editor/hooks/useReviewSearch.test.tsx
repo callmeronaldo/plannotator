@@ -3,6 +3,7 @@ import React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
+  isReviewCurrentFileSearchShortcut,
   isReviewGlobalSearchShortcut,
   shouldHandleReviewSearchShortcut,
   useReviewSearch,
@@ -91,8 +92,11 @@ describe('useReviewSearch', () => {
 
     expect(isReviewGlobalSearchShortcut(chord())).toBe(true);
     expect(isReviewGlobalSearchShortcut(chord({ ctrlKey: false, metaKey: true }))).toBe(true);
+    expect(isReviewCurrentFileSearchShortcut(chord())).toBe(false);
+    expect(isReviewCurrentFileSearchShortcut(chord({ shiftKey: false }))).toBe(true);
     expect(isReviewGlobalSearchShortcut(chord({ shiftKey: false }))).toBe(false);
     expect(isReviewGlobalSearchShortcut(chord({ altKey: true }))).toBe(false);
+    expect(isReviewCurrentFileSearchShortcut(chord({ shiftKey: false, altKey: true }))).toBe(false);
     expect(isReviewGlobalSearchShortcut(chord({ key: 'g' }))).toBe(false);
   });
 
