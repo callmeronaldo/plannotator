@@ -47,6 +47,8 @@ interface FileHeaderProps {
   editDisabledReason?: string | null;
   /** Optional focused-file previous/next diff-block controls. */
   changeNavigation?: React.ReactNode;
+  /** Optional focused-file full-context loading/toggle control. */
+  contextControl?: React.ReactNode;
   /** Compact coarse-pointer treatment. Defaults to the enclosing review state. */
   compactTouchLayout?: boolean;
   /** Marked `linguist-generated` in `.gitattributes` (#1317) — renders a
@@ -135,6 +137,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
   isEditing = false,
   editDisabledReason,
   changeNavigation,
+  contextControl,
   compactTouchLayout,
   readOnly = false,
   isGenerated = false,
@@ -244,6 +247,12 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
           </span>
         )}
       </div>
+      {isCompactTouchLayout && (changeNavigation || contextControl) && (
+        <div className="flex flex-none items-center gap-1 pl-1">
+          {changeNavigation}
+          {contextControl}
+        </div>
+      )}
       {!isCompactTouchLayout && <div className={`flex flex-shrink-0 items-center pl-2 ${isCompact ? 'gap-1' : 'gap-2'}`}>
         {showViewedControl && onToggleViewed && (
           <button
@@ -319,6 +328,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
           </button>
         )}
         {changeNavigation}
+        {contextControl}
         <CallFlowFileBadge filePath={filePath} oldPath={oldPath} />
         <SemanticFileBadge filePath={filePath} />
         {/* Edit entry lives at the far right of the row, next to the file

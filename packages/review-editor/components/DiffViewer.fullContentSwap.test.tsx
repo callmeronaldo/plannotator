@@ -100,6 +100,21 @@ function shadowHTML(host: HTMLElement): string {
   return out;
 }
 
+function shadowText(host: HTMLElement): string {
+  let out = host.textContent ?? '';
+  const visit = (root: ParentNode) => {
+    for (const el of root.querySelectorAll('*')) {
+      const shadow = (el as { shadowRoot?: ShadowRoot | null }).shadowRoot;
+      if (shadow) {
+        out += shadow.textContent ?? '';
+        visit(shadow);
+      }
+    }
+  };
+  visit(host);
+  return out;
+}
+
 function countExpandButtons(host: HTMLElement): number {
   return (shadowHTML(host).match(/data-expand-button/g) ?? []).length;
 }
@@ -276,6 +291,16 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
       const html = shadowHTML(host!);
       expect(html).toContain('data-expand-index');
       expect(html).not.toContain('const head0 = 0;');
+
+      // The focused file starts hunk-scoped, but complete context must be an
+      // explicit, discoverable action rather than a hidden background detail.
+      const fullFileToggle = host!.querySelector<HTMLButtonElement>('[data-full-file-toggle]');
+      expect(fullFileToggle).not.toBeNull();
+      expect(fullFileToggle!.disabled).toBe(false);
+      await act(async () => fullFileToggle!.click());
+      const expanded = await waitUntil(() => shadowText(host!).includes('const head0 = 0;'));
+      if (!expanded) console.error(renderDiagnostics(host, 'full-file toggle did not expand context'));
+      expect(expanded).toBe(true);
     },
     // The only wall-clock bound in this test, and only a backstop: the
     // assertions themselves are budgeted in scheduler turns.

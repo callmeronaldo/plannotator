@@ -156,11 +156,28 @@ describe.if(hasDom)('header control visibility (DOM)', () => {
     expect(el.querySelector('button[title*="Edit this file"]')).not.toBeNull();
   });
 
-  test('a multi-hunk focused file exposes previous/next diff navigation', async () => {
-    const el = await render(view({ patch: TWO_HUNK_PATCH }, () => {}));
+  test('focused files always expose diff-block position and navigation controls', async () => {
+    const single = await render(view({}, () => {}));
+    const singleNavigator = single.querySelector('[data-diff-hunk-navigator]');
+    expect(singleNavigator).not.toBeNull();
+    expect(singleNavigator?.textContent).toContain('1/1');
+    expect(single.querySelector<HTMLButtonElement>('button[aria-label="Previous diff block"]')?.disabled).toBe(true);
+
+    await act(async () => root!.unmount());
+    root = null;
+    single.remove();
+    host = null;
+
+    const multiple = await render(view({ patch: TWO_HUNK_PATCH }, () => {}));
+    expect(multiple.querySelector('[data-diff-hunk-navigator]')).not.toBeNull();
+    expect(multiple.querySelector<HTMLButtonElement>('button[aria-label="Previous diff block"]')?.disabled).toBe(false);
+    expect(multiple.querySelector<HTMLButtonElement>('button[aria-label="Next diff block"]')?.disabled).toBe(false);
+  });
+
+  test('compact focused-file headers retain navigation and full-file controls', async () => {
+    const el = await render(view({ compactTouchLayout: true, patch: TWO_HUNK_PATCH }, () => {}));
     expect(el.querySelector('[data-diff-hunk-navigator]')).not.toBeNull();
-    expect(el.querySelector('button[aria-label="Previous diff block"]')).not.toBeNull();
-    expect(el.querySelector('button[aria-label="Next diff block"]')).not.toBeNull();
+    expect(el.querySelector('[data-full-file-toggle]')).not.toBeNull();
   });
 
   test('Mod+F opens current-file find in the focused diff tab', async () => {

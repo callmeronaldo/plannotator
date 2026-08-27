@@ -29,7 +29,7 @@ export const DiffHunkNavigator: React.FC<DiffHunkNavigatorProps> = ({ viewport, 
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!viewport || marks.length < 2) {
+    if (!viewport || marks.length === 0) {
       setActiveIndex(0);
       return;
     }
@@ -48,10 +48,11 @@ export const DiffHunkNavigator: React.FC<DiffHunkNavigatorProps> = ({ viewport, 
     };
   }, [viewport, marks]);
 
-  if (marks.length < 2) return null;
+  if (marks.length === 0) return null;
 
+  const canNavigate = viewport != null && marks.length > 1;
   const navigate = (direction: -1 | 1) => {
-    if (!viewport) return;
+    if (!canNavigate || !viewport) return;
     const nextIndex = (activeIndex + direction + marks.length) % marks.length;
     setActiveIndex(nextIndex);
     const max = viewport.scrollHeight - viewport.clientHeight;
@@ -67,7 +68,7 @@ export const DiffHunkNavigator: React.FC<DiffHunkNavigatorProps> = ({ viewport, 
       <button
         type="button"
         className="flex h-full w-6 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-        disabled={!viewport}
+        disabled={!canNavigate}
         onClick={(event) => {
           event.stopPropagation();
           navigate(-1);
@@ -85,7 +86,7 @@ export const DiffHunkNavigator: React.FC<DiffHunkNavigatorProps> = ({ viewport, 
       <button
         type="button"
         className="flex h-full w-6 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-        disabled={!viewport}
+        disabled={!canNavigate}
         onClick={(event) => {
           event.stopPropagation();
           navigate(1);

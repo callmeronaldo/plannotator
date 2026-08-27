@@ -42,6 +42,7 @@ import {
 import { EditSessionHud } from './EditSessionHud';
 import { DiffHunkNavigator } from './DiffHunkNavigator';
 import { FileFindWidget } from './FileFindWidget';
+import { FullFileToggle, type FullFileContextState } from './FullFileToggle';
 import { useSingleFileEditSession } from '../edit/useSingleFileEditSession';
 import type { SuggestionHunk } from '../edit/deriveSuggestions';
 import type { EditSelectionAnnotationRequest, EditSelectionComment } from '../edit/useEditSession';
@@ -402,12 +403,18 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     return parsed;
   }, [patch, filePath]);
 
-  // Fetch full file contents for expandable context
+  // Fetch full file contents for expandable context. Keep transport state
+  // explicit so the focused-file header can tell the reviewer whether the
+  // complete source is loading, available, or unavailable for this snapshot.
   const [fileContents, setFileContents] = useState<{ forPath: string; old: string | null; new: string | null } | null>(null);
+  const [fileContentState, setFileContentState] = useState<FullFileContextState>('loading');
+  const [showFullFile, setShowFullFile] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
     setFileContents(null);
+    setFileContentState('loading');
+    setShowFullFile(false);
     const params = new URLSearchParams({ path: filePath });
     if (oldPath) params.set('oldPath', oldPath);
     if (reviewBase) params.set('base', reviewBase);
@@ -417,9 +424,16 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       .then((data: { oldContent: string | null; newContent: string | null } | null) => {
         if (data && (data.oldContent != null || data.newContent != null)) {
           setFileContents({ forPath: filePath, old: data.oldContent, new: data.newContent });
+          setFileContentState('ready');
+        } else {
+          setFileContentState('unavailable');
         }
       })
-      .catch(() => {}); // Silent fallback — no expansion in demo mode
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          setFileContentState('unavailable');
+        }
+      });
     return () => controller.abort();
   }, [filePath, oldPath, reviewBase, reviewSnapshotId]);
 
@@ -454,6 +468,12 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       return fileDiff;
     }
   }, [patch, filePath, oldPath, fileContents, fileDiff]);
+
+  const fullFileContextState: FullFileContextState = fileContentState === 'ready'
+    ? augmentedDiff !== fileDiff && !augmentedDiff.isPartial
+      ? 'ready'
+      : 'unavailable'
+    : fileContentState;
 
   const editEnabled = enableEditSuggestions && onAddSuggestionsForFile != null;
   const editGeneration = `${filePath}:${hashString(patch)}:${reviewBase ?? ''}:${reviewSnapshotId ?? ''}`;
@@ -905,9 +925,10 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       disableLineNumbers={disableLineNumbers}
       disableBackground={disableBackground}
       // A focused file opens on review-relevant hunks, not the entire source.
-      // Full contents are still hydrated behind the diff so each collapsed gap
-      // can be expanded explicitly and edit-to-suggestion has a complete buffer.
-      expandUnchanged={false}
+      // Full contents are hydrated behind the diff so gaps can be expanded
+      // individually or all at once via the explicit Full file control; the
+      // edit-to-suggestion adapter receives the same complete buffer.
+      expandUnchanged={showFullFile}
       mergedAnnotations={mergedAnnotations}
       pendingSelection={pendingSelection ?? selectedAnnotationRange}
       onLineSelectionEnd={handlePierreLineSelectionEnd}
@@ -957,8 +978,19 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         isEditing={editSession.editing}
         editDisabledReason={editSession.editDisabledReason}
         changeNavigation={
-          !editSession.editing && overviewMarks.length > 1
+          !editSession.editing && overviewMarks.length > 0
             ? <DiffHunkNavigator viewport={viewport ?? null} marks={overviewMarks} />
+            : undefined
+        }
+        contextControl={
+          !editSession.editing
+            ? (
+                <FullFileToggle
+                  state={fullFileContextState}
+                  expanded={showFullFile}
+                  onToggle={() => setShowFullFile((expanded) => !expanded)}
+                />
+              )
             : undefined
         }
       />
