@@ -40,6 +40,7 @@ import { useCallFlowAutoInstall } from './hooks/useCallFlowAutoInstall';
 import { extractLinesFromPatch, isLineRangeInPatch } from './utils/patchParser';
 import { resolveCallFlowAnnotationPlacement } from './utils/callFlowAnnotations';
 import {
+  isReviewGlobalSearchShortcut,
   shouldHandleReviewSearchShortcut,
   isTypingTarget,
   useReviewSearch,
@@ -1609,15 +1610,17 @@ const ReviewApp: React.FC = () => {
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl+F to focus file search when diff files are available.
+      // Cmd/Ctrl+Shift+F opens the cross-file review search, matching the
+      // workspace-search convention used by VS Code and other editors. Plain
+      // Cmd/Ctrl+F is intentionally not intercepted: it remains the active
+      // editor/browser's current-document text search.
       // Bail while the guide takeover is open (file tree isn't rendered) and
       // don't intercept in the Commits view (its rail has no search input) —
       // in both cases capturing the key would mutate hidden state or no-op.
       // Let the same shortcut reselect the current query when search already
       // has focus, while preserving native shortcuts in every other input.
       if (
-        (e.metaKey || e.ctrlKey)
-        && e.key.toLowerCase() === 'f'
+        isReviewGlobalSearchShortcut(e)
         && shouldHandleReviewSearchShortcut(e.target, searchInputRef.current)
       ) {
         if (guideOpen) return;

@@ -3,6 +3,7 @@ import React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
+  isReviewGlobalSearchShortcut,
   shouldHandleReviewSearchShortcut,
   useReviewSearch,
   type UseReviewSearchResult,
@@ -76,6 +77,23 @@ describe('useReviewSearch', () => {
     expect(shouldHandleReviewSearchShortcut(fakeElement('TEXTAREA'), searchInput)).toBe(false);
     expect(shouldHandleReviewSearchShortcut(fakeElement('DIV', true), searchInput)).toBe(false);
     expect(shouldHandleReviewSearchShortcut(fakeElement('DIV'), searchInput)).toBe(true);
+  });
+
+  test('reserves plain Mod+F for current-document find', () => {
+    const chord = (overrides: Partial<Parameters<typeof isReviewGlobalSearchShortcut>[0]> = {}) => ({
+      altKey: false,
+      ctrlKey: true,
+      key: 'f',
+      metaKey: false,
+      shiftKey: true,
+      ...overrides,
+    });
+
+    expect(isReviewGlobalSearchShortcut(chord())).toBe(true);
+    expect(isReviewGlobalSearchShortcut(chord({ ctrlKey: false, metaKey: true }))).toBe(true);
+    expect(isReviewGlobalSearchShortcut(chord({ shiftKey: false }))).toBe(false);
+    expect(isReviewGlobalSearchShortcut(chord({ altKey: true }))).toBe(false);
+    expect(isReviewGlobalSearchShortcut(chord({ key: 'g' }))).toBe(false);
   });
 
   test.skipIf(!hasDom)('selects the existing query whenever search is opened again', async () => {

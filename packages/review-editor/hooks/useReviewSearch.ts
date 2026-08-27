@@ -27,6 +27,17 @@ export function shouldHandleReviewSearchShortcut(
   return !isTypingTarget(target) || target === searchInput;
 }
 
+/** VS Code-style workspace search chord. Plain Mod+F is deliberately left to
+ * the active editor/browser's current-document find implementation. */
+export function isReviewGlobalSearchShortcut(
+  event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>,
+): boolean {
+  return (event.metaKey || event.ctrlKey)
+    && event.shiftKey
+    && !event.altKey
+    && event.key.toLowerCase() === 'f';
+}
+
 interface UseReviewSearchOptions {
   files: ReviewSearchableDiffFile[];
   activeFilePath: string | null;

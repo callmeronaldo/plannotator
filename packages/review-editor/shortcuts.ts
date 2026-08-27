@@ -30,10 +30,10 @@ export const reviewEditorShortcuts = defineShortcutScope({
       displayOrder: 20,
     },
     focusSearch: {
-      description: 'Focus search',
-      bindings: ['Mod+F'],
+      description: 'Search across changed files',
+      bindings: ['Mod+Shift+F'],
       section: 'Search',
-      hint: 'Available when the file tree search bar is shown.',
+      hint: 'Opens the file-tree search. Mod+F remains current-document find.',
       displayOrder: 10,
     },
     nextSearchMatch: {
