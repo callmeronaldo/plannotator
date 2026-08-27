@@ -224,6 +224,9 @@ describe('AllFilesCodeView change overview', () => {
     await render();
 
     expect(host.querySelector('[data-diff-overview-ruler]')).not.toBeNull();
+    // The marks arrive asynchronously after CodeView's first render. The
+    // content gutter must not depend on that arrival or every file reflows once.
+    expect(host.querySelector('[data-diff-overview-content]')?.className).toContain('right-3.5');
   });
 });
 

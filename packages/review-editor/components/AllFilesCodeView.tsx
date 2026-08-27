@@ -2609,11 +2609,18 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     />
   );
 
-  const overviewEnabled = !compactTouchLayout && !readOnly && overviewMarks.length > 0;
+  // Reserve the ruler gutter from the first paint. `overviewMarks` is populated
+  // one rAF after CodeView mounts; making the content width depend on that
+  // async result first paints full-width and then shrinks every diff by 14px,
+  // forcing Pierre and every responsive FileHeader to reflow visibly.
+  const overviewGutterReserved = !compactTouchLayout && !readOnly;
 
   return (
     <div className="relative h-full">
-      <div className={overviewEnabled ? 'absolute inset-y-0 left-0 right-3.5' : 'h-full'}>
+      <div
+        data-diff-overview-content
+        className={overviewGutterReserved ? 'absolute inset-y-0 left-0 right-3.5' : 'h-full'}
+      >
         {/* EditProvider only mounts when the experimental flag is on; its
             factory declines attaches until the lazy editor chunk has loaded
             (the chunk loads on first Edit click, never before). */}
@@ -2624,7 +2631,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         )}
       </div>
 
-      {overviewEnabled && (
+      {overviewGutterReserved && overviewMarks.length > 0 && (
         <DiffOverviewRuler
           viewport={scrollEl}
           marks={overviewMarks}
