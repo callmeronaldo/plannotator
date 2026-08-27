@@ -191,6 +191,8 @@ interface DiffViewerProps {
   lineDiffType?: 'word-alt' | 'word' | 'char' | 'none';
   disableLineNumbers?: boolean;
   disableBackground?: boolean;
+  /** Retained for caller compatibility; focused tabs always start with
+   * unchanged regions folded and expose per-gap expansion controls instead. */
   expandUnchanged?: boolean;
   fontFamily?: string;
   fontSize?: string;
@@ -261,7 +263,6 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   lineDiffType,
   disableLineNumbers,
   disableBackground,
-  expandUnchanged,
   fontFamily,
   fontSize,
   annotations,
@@ -570,7 +571,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     roots.forEach(root =>
       applySearchHighlights(root, query, matches, activeSearchMatchId)
     );
-  }, [searchQuery, searchMatches, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, expandUnchanged, augmentedDiff, viewport]);
+  }, [searchQuery, searchMatches, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, augmentedDiff, viewport]);
 
   // Swap active search highlight instantly when stepping between matches.
   // This avoids a full rebuild just to change two elements' background color.
@@ -583,7 +584,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   useEffect(() => {
     if (!activeSearchMatch || !containerRef.current) return;
     return retryScrollToSearchMatch(containerRef.current, activeSearchMatch);
-  }, [activeSearchMatch, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, expandUnchanged, viewport]);
+  }, [activeSearchMatch, filePath, diffStyle, diffOverflow, diffIndicators, lineDiffType, disableLineNumbers, disableBackground, viewport]);
 
   // Scroll to the selected line range — drives "jump to entity" from semantic-diff
   // clicks and AI "scroll to lines". Mirrors the scroll-to-annotation behavior used
@@ -829,7 +830,10 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       lineDiffType={lineDiffType}
       disableLineNumbers={disableLineNumbers}
       disableBackground={disableBackground}
-      expandUnchanged={expandUnchanged}
+      // A focused file opens on review-relevant hunks, not the entire source.
+      // Full contents are still hydrated behind the diff so each collapsed gap
+      // can be expanded explicitly and edit-to-suggestion has a complete buffer.
+      expandUnchanged={false}
       mergedAnnotations={mergedAnnotations}
       pendingSelection={pendingSelection ?? selectedAnnotationRange}
       onLineSelectionEnd={handlePierreLineSelectionEnd}

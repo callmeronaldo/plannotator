@@ -82,7 +82,6 @@ export const ReviewDiffPanel: React.FC<IDockviewPanelProps> = (props) => {
         lineDiffType={state.lineDiffType}
         disableLineNumbers={state.disableLineNumbers}
         disableBackground={state.disableBackground}
-        expandUnchanged={state.expandUnchanged}
         fontFamily={state.fontFamily}
         fontSize={state.fontSize}
         annotations={fileAnnotations}

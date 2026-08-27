@@ -237,7 +237,10 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
       document.body.appendChild(host);
       root = createRoot(host);
       await act(async () => {
-        root!.render(view());
+        // Even a persisted "Full file context" preference must not turn a
+        // focused file tab into a source viewer. The tab starts on hunks and
+        // leaves each unchanged gap explicitly expandable.
+        root!.render(view({ expandUnchanged: true }));
       });
 
       // The gate is still closed here, so the augmented diff cannot exist yet
@@ -268,8 +271,11 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
       expect(swapped).toBe(true);
 
       // And the separator now advertises a real expand target, which is what
-      // makes the click live rather than dead.
-      expect(shadowHTML(host!)).toContain('data-expand-index');
+      // makes the click live rather than dead. Unchanged source outside the
+      // patch stays folded until the reviewer explicitly expands that gap.
+      const html = shadowHTML(host!);
+      expect(html).toContain('data-expand-index');
+      expect(html).not.toContain('const head0 = 0;');
     },
     // The only wall-clock bound in this test, and only a backstop: the
     // assertions themselves are budgeted in scheduler turns.
