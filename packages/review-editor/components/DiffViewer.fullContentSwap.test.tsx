@@ -1,20 +1,22 @@
 /**
- * The single-file diff tab must actually REPAINT when the full-content diff
- * arrives.
+ * The single-file diff tab mounts Pierre's renderer ONCE, with complete file
+ * context, instead of painting a partial patch first and swapping the
+ * augmented diff in later (the swap was user-visible as a flash/reflow).
  *
- * DiffViewer renders twice for every file it shows: first the PARTIAL diff
- * parsed from the raw patch (`getSingularPatch`), then, once
- * `/api/file-content` resolves, an AUGMENTED full-content diff
- * (`processFile`) swapped onto the SAME surviving FileDiff instance
- * (`key={filePath}`). Only the augmented diff can be expanded, so the
- * gutter's expansion chevrons appear only after the swap lands.
+ * DiffViewer parses two diff objects for every file: the PARTIAL diff from
+ * the raw patch (`getSingularPatch`) and, once `/api/file-content` resolves,
+ * the AUGMENTED full-content diff (`processFile`) — the only one that can be
+ * expanded. While the fetch is in flight the tab shows a stable loading
+ * skeleton and mounts no diff at all; Pierre mounts only when the augmented
+ * diff is ready, or falls back to the partial diff when full content is
+ * unavailable.
  *
  * @pierre/diffs 1.3.2 defaults `fileDiff.cacheKey` to the file NAME when the
  * caller leaves it unset, and `areDiffTargetsEqual` compares nothing but that
  * key. Two diffs of the same file therefore look identical to the render
- * cache, so the augmented diff is served the stale partial render forever:
- * gap bars with no chevrons, dead clicks, at every file size. The fix mints
- * content-derived cache keys for BOTH diffs.
+ * cache, so the augmented diff must mint its own content-derived key or it is
+ * silently served the partial render: gap bars with no chevrons and dead
+ * expansion clicks, at every file size.
  *
  * Real @pierre/diffs (no diff mocks) — the defect lives entirely inside its
  * DiffHunksRenderer cache, so a mocked renderer would prove nothing. Only
@@ -208,11 +210,10 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
   });
 
   test(
-    'expansion affordances appear once /api/file-content lands',
+    'diff mounts once with full context — no partial paint, no swap flash',
     async () => {
-      // The full-content response is held until the partial baseline has been
-      // asserted — with the fix the swap lands within a frame, so an
-      // unthrottled response would race the baseline check.
+      // The full-content response is held until the loading baseline has been
+      // asserted, so the gate (not scheduler timing) decides what painted.
       let markRequested: (() => void) | null = null;
       const fileContentRequested = new Promise<void>((resolve) => {
         markRequested = resolve;
@@ -259,18 +260,14 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
       });
 
       // The gate is still closed here, so the augmented diff cannot exist yet
-      // no matter how slow the box is.
+      // no matter how slow the box is. The pre-mount contract: a stable
+      // loading surface, and NO Pierre paint at all — painting the partial
+      // diff first is precisely the flash this component must not produce.
       await fileContentRequested;
-      // Reported, deliberately NOT asserted. The verdict belongs to the swap
-      // below: whether the partial diff had painted first only affects how
-      // strong the "no chevrons yet" observation is, and making it a hard gate
-      // would let a slow or absent FIRST paint mask the result we actually
-      // came for. A tree without the fix still fails, because it never paints
-      // chevrons at any point.
-      const painted = await waitUntil(() => shadowHTML(host!).includes('data-separator'));
-      if (!painted) console.error(renderDiagnostics(host, 'partial diff never painted'));
-      // A partial diff is not expandable, so Pierre draws its gap bars without
-      // chevrons. This is the state the stale render cache freezes forever.
+      expect(host!.querySelector('[data-focused-file-loading]')).not.toBeNull();
+      const htmlWhileLoading = shadowHTML(host!);
+      expect(htmlWhileLoading.includes('diffs-container')).toBe(false);
+      expect(htmlWhileLoading.includes('data-separator')).toBe(false);
       expect(countExpandButtons(host!)).toBe(0);
 
       await act(async () => {
@@ -278,19 +275,19 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
         await sleep(0);
       });
 
-      // The augmented full-content diff must reach the PIXELS, not just the
-      // React tree: expansion chevrons in the gap bars. With the fix these
-      // arrive in the first turn or two; without it they never arrive at all.
+      // The augmented full-content diff must reach the PIXELS on its FIRST
+      // paint: expansion chevrons in the gap bars, loading surface gone.
       const swapped = await waitUntil(() => countExpandButtons(host!) > 0);
       if (!swapped) console.error(renderDiagnostics(host, 'augmented diff never painted'));
       expect(swapped).toBe(true);
+      expect(host!.querySelector('[data-focused-file-loading]')).toBeNull();
 
       // And the separator now advertises a real expand target, which is what
       // makes the click live rather than dead. Unchanged source outside the
       // patch stays folded until the reviewer explicitly expands that gap.
       const html = shadowHTML(host!);
       expect(html).toContain('data-expand-index');
-      expect(html).not.toContain('const head0 = 0;');
+      expect(shadowText(host!)).not.toContain('const head0 = 0;');
 
       // The focused file starts hunk-scoped, but complete context must be an
       // explicit, discoverable action rather than a hidden background detail.
@@ -304,6 +301,41 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
     },
     // The only wall-clock bound in this test, and only a backstop: the
     // assertions themselves are budgeted in scheduler turns.
+    180_000,
+  );
+
+  test(
+    'falls back to the partial diff when full content is unavailable',
+    async () => {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/file-content')) {
+          return new Response(JSON.stringify({ oldContent: null, newContent: null }), {
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('{}', { headers: { 'content-type': 'application/json' } });
+      }) as typeof fetch;
+
+      host = document.createElement('div');
+      document.body.appendChild(host);
+      root = createRoot(host);
+      await act(async () => {
+        root!.render(view({}));
+      });
+
+      // Demo mode / server without file content: the skeleton must give way
+      // to the partial diff rather than gating the tab forever.
+      const painted = await waitUntil(() => shadowHTML(host!).includes('data-separator'));
+      if (!painted) console.error(renderDiagnostics(host, 'partial fallback never painted'));
+      expect(painted).toBe(true);
+      expect(host!.querySelector('[data-focused-file-loading]')).toBeNull();
+      // A partial diff is not expandable — gap bars without chevrons, and the
+      // toggle says so instead of offering a dead switch.
+      expect(countExpandButtons(host!)).toBe(0);
+      const fullFileToggle = host!.querySelector<HTMLButtonElement>('[data-full-file-toggle]');
+      expect(fullFileToggle!.disabled).toBe(true);
+    },
     180_000,
   );
 });

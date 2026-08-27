@@ -403,17 +403,28 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     return parsed;
   }, [patch, filePath]);
 
-  // Fetch full file contents for expandable context. Keep transport state
-  // explicit so the focused-file header can tell the reviewer whether the
-  // complete source is loading, available, or unavailable for this snapshot.
-  const [fileContents, setFileContents] = useState<{ forPath: string; old: string | null; new: string | null } | null>(null);
-  const [fileContentState, setFileContentState] = useState<FullFileContextState>('loading');
+  // Fetch full file contents before mounting Pierre. The request identity is
+  // part of both state records so a path/base/snapshot switch cannot paint one
+  // frame from the previous file while this effect is waiting to reset state.
+  const fileContentRequestKey = `${filePath}\0${oldPath ?? ''}\0${reviewBase ?? ''}\0${reviewSnapshotId ?? ''}\0${hashString(patch)}`;
+  const [fileContents, setFileContents] = useState<{
+    forRequest: string;
+    old: string | null;
+    new: string | null;
+  } | null>(null);
+  const [fileContentLoad, setFileContentLoad] = useState<{
+    forRequest: string;
+    state: FullFileContextState;
+  }>({ forRequest: '', state: 'loading' });
   const [showFullFile, setShowFullFile] = useState(false);
+  const fileContentState: FullFileContextState = fileContentLoad.forRequest === fileContentRequestKey
+    ? fileContentLoad.state
+    : 'loading';
 
   useEffect(() => {
     const controller = new AbortController();
     setFileContents(null);
-    setFileContentState('loading');
+    setFileContentLoad({ forRequest: fileContentRequestKey, state: 'loading' });
     setShowFullFile(false);
     const params = new URLSearchParams({ path: filePath });
     if (oldPath) params.set('oldPath', oldPath);
@@ -423,24 +434,28 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       .then(res => res.ok ? res.json() : null)
       .then((data: { oldContent: string | null; newContent: string | null } | null) => {
         if (data && (data.oldContent != null || data.newContent != null)) {
-          setFileContents({ forPath: filePath, old: data.oldContent, new: data.newContent });
-          setFileContentState('ready');
+          setFileContents({
+            forRequest: fileContentRequestKey,
+            old: data.oldContent,
+            new: data.newContent,
+          });
+          setFileContentLoad({ forRequest: fileContentRequestKey, state: 'ready' });
         } else {
-          setFileContentState('unavailable');
+          setFileContentLoad({ forRequest: fileContentRequestKey, state: 'unavailable' });
         }
       })
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === 'AbortError')) {
-          setFileContentState('unavailable');
+          setFileContentLoad({ forRequest: fileContentRequestKey, state: 'unavailable' });
         }
       });
     return () => controller.abort();
-  }, [filePath, oldPath, reviewBase, reviewSnapshotId]);
+  }, [fileContentRequestKey, filePath, oldPath, reviewBase, reviewSnapshotId]);
 
   // Re-parse the patch with full file contents so hunk indices are computed
   // against the complete file (isPartial: false), enabling expansion.
   const augmentedDiff = useMemo(() => {
-    if (!fileContents || fileContents.forPath !== filePath || (fileContents.old == null && fileContents.new == null)) return fileDiff;
+    if (!fileContents || fileContents.forRequest !== fileContentRequestKey || (fileContents.old == null && fileContents.new == null)) return fileDiff;
     // Stale-content guard (same as AllFilesCodeView): the file may have
     // changed on disk since the diff was captured — augmenting with contents
     // that don't reconcile with the patch breaks Pierre's line math. Fall back
@@ -467,7 +482,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     } catch {
       return fileDiff;
     }
-  }, [patch, filePath, oldPath, fileContents, fileDiff]);
+  }, [patch, filePath, oldPath, fileContents, fileContentRequestKey, fileDiff]);
 
   const fullFileContextState: FullFileContextState = fileContentState === 'ready'
     ? augmentedDiff !== fileDiff && !augmentedDiff.isPartial
@@ -900,6 +915,9 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     () => !isOversizedStub && isContentlessBinaryPatch(patch),
     [patch, isOversizedStub],
   );
+  const isWaitingForFullFile = fullFileContextState === 'loading'
+    && !isOversizedStub
+    && !isContentlessBinary;
 
   // Replay a selected line/range comment's anchor as the controlled highlight so
   // clicking it (inline card or sidebar) lights up its lines. A live compose
@@ -979,11 +997,11 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         editDisabledReason={editSession.editDisabledReason}
         changeNavigation={
           !editSession.editing && overviewMarks.length > 0
-            ? <DiffHunkNavigator viewport={viewport ?? null} marks={overviewMarks} />
+            ? <DiffHunkNavigator viewport={isWaitingForFullFile ? null : viewport ?? null} marks={overviewMarks} />
             : undefined
         }
         contextControl={
-          !editSession.editing
+          !editSession.editing && !isOversizedStub && !isContentlessBinary
             ? (
                 <FullFileToggle
                   state={fullFileContextState}
@@ -1038,7 +1056,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         />
         <div className="p-4" ref={diffContentRef}>
           <div ref={splitSurfaceRef} className="relative min-w-0" style={splitGridStyle}>
-            {isSplitLayout && diffOverflow !== 'wrap' && (
+            {!isWaitingForFullFile && isSplitLayout && diffOverflow !== 'wrap' && (
               <div
                 className="absolute top-0 bottom-0 z-10 cursor-col-resize group"
                 style={{ left: `${splitRatio * 100}%`, width: 9, marginLeft: -4 }}
@@ -1048,7 +1066,20 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
                 <div className="pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-border transition-[width,background-color] group-hover:w-0.5 group-hover:bg-primary/50 group-active:w-0.5 group-active:bg-primary/70" />
               </div>
             )}
-            {editEnabled ? (
+            {isWaitingForFullFile ? (
+              <div
+                className="space-y-2 rounded-md border border-border/50 bg-muted/20 p-3"
+                data-focused-file-loading
+                role="status"
+                aria-label="Loading complete file context"
+              >
+                <div className="h-3 w-2/5 animate-pulse rounded bg-muted" />
+                <div className="h-3 w-4/5 animate-pulse rounded bg-muted/80" />
+                <div className="h-3 w-3/5 animate-pulse rounded bg-muted/80" />
+                <div className="h-3 w-5/6 animate-pulse rounded bg-muted/80" />
+                <span className="sr-only">Loading complete file context…</span>
+              </div>
+            ) : editEnabled ? (
               <EditProvider createEditor={editSession.createEditor}>
                 {pierreDiffContent}
               </EditProvider>
