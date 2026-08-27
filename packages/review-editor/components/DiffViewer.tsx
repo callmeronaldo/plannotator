@@ -40,6 +40,7 @@ import {
   type LineSelectionSource,
 } from '../utils/lineSelectionBehavior';
 import { EditSessionHud } from './EditSessionHud';
+import { DiffHunkNavigator } from './DiffHunkNavigator';
 import { useSingleFileEditSession } from '../edit/useSingleFileEditSession';
 import type { SuggestionHunk } from '../edit/deriveSuggestions';
 import type { EditSelectionAnnotationRequest, EditSelectionComment } from '../edit/useEditSession';
@@ -882,6 +883,11 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         onEditFile={editEnabled ? editSession.startEdit : undefined}
         isEditing={editSession.editing}
         editDisabledReason={editSession.editDisabledReason}
+        changeNavigation={
+          !editSession.editing && overviewMarks.length > 1
+            ? <DiffHunkNavigator viewport={viewport ?? null} marks={overviewMarks} />
+            : undefined
+        }
       />
 
       {editSession.editing && (

@@ -45,6 +45,8 @@ interface FileHeaderProps {
   isEditing?: boolean;
   /** When set, the Edit button is disabled with this tooltip. */
   editDisabledReason?: string | null;
+  /** Optional focused-file previous/next diff-block controls. */
+  changeNavigation?: React.ReactNode;
   /** Compact coarse-pointer treatment. Defaults to the enclosing review state. */
   compactTouchLayout?: boolean;
   /** Marked `linguist-generated` in `.gitattributes` (#1317) — renders a
@@ -132,6 +134,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
   onEditFile,
   isEditing = false,
   editDisabledReason,
+  changeNavigation,
   compactTouchLayout,
   readOnly = false,
   isGenerated = false,
@@ -315,6 +318,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
             {commentLabel && <span>{commentLabel}</span>}
           </button>
         )}
+        {changeNavigation}
         <CallFlowFileBadge filePath={filePath} oldPath={oldPath} />
         <SemanticFileBadge filePath={filePath} />
         {/* Edit entry lives at the far right of the row, next to the file

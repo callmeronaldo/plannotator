@@ -50,6 +50,19 @@ const TEXT_PATCH = [
   '',
 ].join('\n');
 
+const TWO_HUNK_PATCH = [
+  'diff --git a/calc.ts b/calc.ts',
+  '--- a/calc.ts',
+  '+++ b/calc.ts',
+  '@@ -1 +1 @@',
+  '-const first = 1;',
+  '+const first = 2;',
+  '@@ -20 +20 @@',
+  '-const last = 1;',
+  '+const last = 2;',
+  '',
+].join('\n');
+
 const VIEWED_BUTTON = 'button[title*="viewed (V)"]';
 const STAGE_BUTTON = 'button[title*="this file (A)"]';
 
@@ -141,6 +154,13 @@ describe.if(hasDom)('header control visibility (DOM)', () => {
     // Sentinel for the focused-file threading: without the new DiffViewer
     // adapter FileHeader receives no edit callback and renders no entry point.
     expect(el.querySelector('button[title*="Edit this file"]')).not.toBeNull();
+  });
+
+  test('a multi-hunk focused file exposes previous/next diff navigation', async () => {
+    const el = await render(view({ patch: TWO_HUNK_PATCH }, () => {}));
+    expect(el.querySelector('[data-diff-hunk-navigator]')).not.toBeNull();
+    expect(el.querySelector('button[aria-label="Previous diff block"]')).not.toBeNull();
+    expect(el.querySelector('button[aria-label="Next diff block"]')).not.toBeNull();
   });
 
 });
