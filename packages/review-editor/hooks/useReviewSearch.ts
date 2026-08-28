@@ -36,6 +36,16 @@ export function isReviewCurrentFileSearchShortcut(
     && event.key.toLowerCase() === 'f';
 }
 
+/** Plain Mod+F opens the workspace search whenever no focused file tab
+ * owns the chord: the all-files view's "document" is the whole changeset, so
+ * VS Code's find-in-active-editor maps to workspace search there. */
+export function shouldFallbackFindToWorkspaceSearch(
+  event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>,
+  isDiffPanelActive: boolean,
+): boolean {
+  return isReviewCurrentFileSearchShortcut(event) && !isDiffPanelActive;
+}
+
 /** VS Code-style workspace search chord. Plain Mod+F belongs to the focused
  * file tab's current-file Find widget. */
 export function isReviewGlobalSearchShortcut(

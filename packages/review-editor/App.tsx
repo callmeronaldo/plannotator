@@ -40,6 +40,7 @@ import { useCallFlowAutoInstall } from './hooks/useCallFlowAutoInstall';
 import { extractLinesFromPatch, isLineRangeInPatch } from './utils/patchParser';
 import { resolveCallFlowAnnotationPlacement } from './utils/callFlowAnnotations';
 import {
+  shouldFallbackFindToWorkspaceSearch,
   isReviewGlobalSearchShortcut,
   shouldHandleReviewSearchShortcut,
   isTypingTarget,
@@ -1612,19 +1613,38 @@ const ReviewApp: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Cmd/Ctrl+Shift+F opens the cross-file review search, matching the
       // workspace-search convention used by VS Code and other editors. Plain
-      // Cmd/Ctrl+F is intentionally not intercepted: it remains the active
-      // editor/browser's current-document text search.
+      // Plain Cmd/Ctrl+F follows VS Code semantics by surface: a focused file
+      // tab's DiffViewer opens its current-file Find widget (its own listener,
+      // active only while that panel is the visible one), and everywhere else
+      // — the all-files view in particular — it opens the workspace search,
+      // because that view's "document" IS the whole changeset. Falling through
+      // to the browser find bar is never the intent.
       // Bail while the guide takeover is open (file tree isn't rendered) and
       // don't intercept in the Commits view (its rail has no search input) —
       // in both cases capturing the key would mutate hidden state or no-op.
       // Let the same shortcut reselect the current query when search already
       // has focus, while preserving native shortcuts in every other input.
+      const opensWorkspaceSearch = hasSearchableFiles && !showCommitsPanel && !guideOpen;
       if (
         isReviewGlobalSearchShortcut(e)
         && shouldHandleReviewSearchShortcut(e.target, searchInputRef.current)
       ) {
-        if (guideOpen) return;
-        if (hasSearchableFiles && !showCommitsPanel) {
+        if (opensWorkspaceSearch) {
+          e.preventDefault();
+          openNavigatorForSearch();
+          openSearch();
+        }
+        return;
+      }
+      // Plain Mod+F outside a focused file tab (all-files, semantic, call
+      // flow, PR panels…) opens the workspace search too. When a diff panel
+      // IS active this branch stays silent so the visible DiffViewer's own
+      // handler owns the chord.
+      if (
+        shouldFallbackFindToWorkspaceSearch(e, isDiffPanelActive)
+        && shouldHandleReviewSearchShortcut(e.target, searchInputRef.current)
+      ) {
+        if (opensWorkspaceSearch) {
           e.preventDefault();
           openNavigatorForSearch();
           openSearch();
@@ -1688,7 +1708,7 @@ const ReviewApp: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showExportModal, showDestinationMenu, isSearchOpen, searchQuery, searchMatches, isSearchPending, openSearch, openNavigatorForSearch, stepSearchMatch, clearSearch, closeSearch, aiUIEnabled, hasSearchableFiles, showCommitsPanel, reviewSidebar.isOpen, reviewSidebar.open, reviewSidebar.close, isFileTreeOpen, guideOpen, isCompactTouchLayout, isCompactNavigatorOpen, toggleNavigator]);
+  }, [showExportModal, showDestinationMenu, isSearchOpen, searchQuery, searchMatches, isSearchPending, openSearch, openNavigatorForSearch, stepSearchMatch, clearSearch, closeSearch, aiUIEnabled, hasSearchableFiles, showCommitsPanel, reviewSidebar.isOpen, reviewSidebar.open, reviewSidebar.close, isFileTreeOpen, guideOpen, isCompactTouchLayout, isCompactNavigatorOpen, toggleNavigator, isDiffPanelActive]);
 
 
   // Load diff content - try API first, fall back to demo
@@ -2947,7 +2967,12 @@ const ReviewApp: React.FC = () => {
     // instances derive `isFocused` from this, so this one line strips their
     // focus claim at the source instead of threading `guideOpen` through every
     // dock panel. Guide-side DiffViewers arbitrate focus among themselves.
-    focusedFilePath: guideOpen ? null : (files[activeFileIndex]?.path ?? null),
+    // The same stripping applies whenever no single-file panel is the ACTIVE
+    // dock panel (all-files / semantic / call-flow views): a hidden panel must
+    // not own the Mod+F chord or paint per-file search state — otherwise
+    // Ctrl+F can open a Find widget inside an invisible tab, which reads to
+    // the reviewer as "the shortcut does nothing".
+    focusedFilePath: guideOpen || !isDiffPanelActive ? null : (files[activeFileIndex]?.path ?? null),
     diffStyle: effectiveDiffStyle,
     onDiffStyleChange: handleDiffStyleChange,
     isCompactTouchLayout,
@@ -3098,7 +3123,7 @@ const ReviewApp: React.FC = () => {
     handleAskAI, handleAskAIForFile, handleViewAIResponse, handleClickAIMarker,
     aiHistoryForSelection, getAIHistoryForFile, agentJobs.jobs, prMetadata, prContext, prArtifacts,
     isPRContextLoading, prContextError, fetchPRContext, platformUser, openDiffFile,
-    handleOpenTour, handleOpenGuide, isAllFilesActive, allFilesOrder, allFilesAllCollapsed, onToggleAllFilesCollapsed, registerAllFilesCollapseToggle, commitInfo, isSemanticDiffActive, semanticDiffUsable,
+    handleOpenTour, handleOpenGuide, isAllFilesActive, isDiffPanelActive, allFilesOrder, allFilesAllCollapsed, onToggleAllFilesCollapsed, registerAllFilesCollapseToggle, commitInfo, isSemanticDiffActive, semanticDiffUsable,
     handleSemanticDiffUnavailable, handleSemanticDiffLoadError, handleSemanticDiffLoadSuccess, handleAddAnnotationForFile,
     callFlowAvailable, callFlowAdvert, callFlowAnalysis, retryCallFlowAnalysis, isCallFlowNodeInPatch, isCallFlowActive, openCallFlowPanel, callFlowInstall,
     editSuggestionsEnabled, handleAddSuggestionsForFile, handleAddEditorCommentForFile,

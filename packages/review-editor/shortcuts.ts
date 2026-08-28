@@ -33,7 +33,7 @@ export const reviewEditorShortcuts = defineShortcutScope({
       description: 'Find in current file',
       bindings: ['Mod+F'],
       section: 'Search',
-      hint: 'Available in a focused file diff tab.',
+      hint: 'Focused file tab: find within that file. Any other view: opens the workspace search.',
       displayOrder: 10,
     },
     focusSearch: {

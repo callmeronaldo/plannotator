@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import {
   isReviewCurrentFileSearchShortcut,
   isReviewGlobalSearchShortcut,
+  shouldFallbackFindToWorkspaceSearch,
   shouldHandleReviewSearchShortcut,
   useReviewSearch,
   type UseReviewSearchResult,
@@ -98,6 +99,23 @@ describe('useReviewSearch', () => {
     expect(isReviewGlobalSearchShortcut(chord({ altKey: true }))).toBe(false);
     expect(isReviewCurrentFileSearchShortcut(chord({ shiftKey: false, altKey: true }))).toBe(false);
     expect(isReviewGlobalSearchShortcut(chord({ key: 'g' }))).toBe(false);
+  });
+
+  test('plain Mod+F falls back to workspace search only outside focused tabs', () => {
+    const plainFind = {
+      altKey: false,
+      ctrlKey: true,
+      key: 'f',
+      metaKey: false,
+      shiftKey: false,
+    };
+    // No focused file tab active (all-files / semantic / PR views): the
+    // workspace search owns plain Mod+F instead of the browser find bar.
+    expect(shouldFallbackFindToWorkspaceSearch(plainFind, false)).toBe(true);
+    // A visible focused tab owns the chord through its DiffViewer listener.
+    expect(shouldFallbackFindToWorkspaceSearch(plainFind, true)).toBe(false);
+    // The workspace chord never routes through the fallback.
+    expect(shouldFallbackFindToWorkspaceSearch({ ...plainFind, shiftKey: true }, false)).toBe(false);
   });
 
   test.skipIf(!hasDom)('selects the existing query whenever search is opened again', async () => {
