@@ -19,12 +19,16 @@ const files: DiffFile[] = [
   },
 ];
 
-function Tree({ query }: { query: string }) {
+function Tree({ query, onOpenFileToSide }: {
+  query: string;
+  onOpenFileToSide?: (path: string) => void;
+}) {
   return (
     <FileTree
       files={files}
       activeFileIndex={0}
       onSelectFile={() => {}}
+      onOpenFileToSide={onOpenFileToSide}
       annotations={[]}
       viewedFiles={new Set()}
       stagedFiles={new Set()}
@@ -69,4 +73,17 @@ describe("FileTree search placement", () => {
       expect(host.textContent).toContain("No matches found");
     },
   );
+
+  test.skipIf(!hasDom)("shows the selected-file side-by-side action in the utility row", async () => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+
+    await act(async () => root?.render(<Tree query="" onOpenFileToSide={() => {}} />));
+
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Open selected file to the side"]');
+    expect(button).not.toBeNull();
+    expect(button?.title).toBe("Open selected file to the side");
+    expect(button?.textContent).toBe("");
+  });
 });

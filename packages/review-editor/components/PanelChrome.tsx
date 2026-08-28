@@ -16,6 +16,7 @@ export function PanelControlsRow({
   stagedCount = 0,
   isSearchVisible = false,
   onOpenSearch,
+  onOpenActiveFileToSide,
   onToggleAllFolders,
   areAllFoldersExpanded = false,
   collapseDisabled = false,
@@ -34,6 +35,8 @@ export function PanelControlsRow({
   stagedCount?: number;
   isSearchVisible?: boolean;
   onOpenSearch?: () => void;
+  /** Opens the currently selected file in a new right-side diff group. */
+  onOpenActiveFileToSide?: () => void;
   /** Tree view only — the sections view has no folders to collapse. */
   onToggleAllFolders?: () => void;
   areAllFoldersExpanded?: boolean;
@@ -126,6 +129,21 @@ export function PanelControlsRow({
           <span className="text-xs text-primary font-medium">
             {stagedCount} added
           </span>
+        )}
+        {onOpenActiveFileToSide && (
+          <button
+            type="button"
+            onClick={onOpenActiveFileToSide}
+            className="panel-utility-button rounded p-1 text-muted-foreground transition-colors hover:bg-muted"
+            aria-label="Open selected file to the side"
+            title="Open selected file to the side"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <rect x="3" y="5" width="7" height="14" rx="1" />
+              <rect x="14" y="5" width="7" height="14" rx="1" />
+              <path strokeLinecap="round" d="M10 12h4m-2-2 2 2-2 2" />
+            </svg>
+          </button>
         )}
         {onOpenSearch && (
           <button

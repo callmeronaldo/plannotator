@@ -31,6 +31,10 @@ interface FileTreeProps {
   files: DiffFile[];
   activeFileIndex: number;
   onSelectFile: (index: number) => void;
+  /** Opens a file in a new dock group to the right of the active panel. */
+  onOpenFileToSide?: (filePath: string) => void;
+  /** Toolbar action for the currently selected file. */
+  onOpenActiveFileToSide?: () => void;
   onDoubleClickFile?: (index: number) => void;
   annotations: CodeAnnotation[];
   viewedFiles: Set<string>;
@@ -132,6 +136,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
   files,
   activeFileIndex,
   onSelectFile,
+  onOpenFileToSide,
+  onOpenActiveFileToSide,
   onDoubleClickFile,
   annotations,
   viewedFiles,
@@ -308,12 +314,17 @@ export const FileTree: React.FC<FileTreeProps> = ({
   const handleToggleFolder = useCallback((_path: string) => {}, []);
   const areAllFoldersExpanded = false;
   const handleToggleAllFolders = useCallback(() => {}, []);
+  const openActiveFileToSide = useCallback(() => {
+    const file = files[activeFileIndex];
+    if (file) onOpenFileToSide?.(file.path);
+  }, [activeFileIndex, files, onOpenFileToSide]);
 
   const panelControls = (
     <PanelControlsRow
       stagedCount={stagedFiles.size}
       isSearchVisible={isSearchVisible}
       onOpenSearch={onOpenSearch}
+      onOpenActiveFileToSide={onOpenActiveFileToSide ?? (onOpenFileToSide && files[activeFileIndex] ? openActiveFileToSide : undefined)}
       onToggleAllFolders={handleToggleAllFolders}
       areAllFoldersExpanded={areAllFoldersExpanded}
       collapseDisabled={allFolderPaths.length === 0}
@@ -584,6 +595,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
                   }
                   scrollHighlightIndex={isAllFilesActive ? scrollHighlightIndex : undefined}
                   onSelectFile={onSelectFile}
+                  onOpenFileToSide={onOpenFileToSide}
                   onDoubleClickFile={onDoubleClickFile}
                   viewedFiles={viewedFiles}
                   onToggleViewed={onToggleViewed}

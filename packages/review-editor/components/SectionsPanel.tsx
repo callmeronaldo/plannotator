@@ -52,6 +52,10 @@ interface SectionsPanelProps {
    * highlight (same treatment as the tree view). */
   scrollHighlightIndex?: number;
   onSelectFile: (index: number) => void;
+  /** Opens a file in a new dock group to the right of the active panel. */
+  onOpenFileToSide?: (filePath: string) => void;
+  /** Toolbar action for the currently selected file. */
+  onOpenActiveFileToSide?: () => void;
   onDoubleClickFile?: (index: number) => void;
   /** j/k/arrows/Home/End file navigation (disabled while modals are open). */
   enableKeyboardNav?: boolean;
@@ -134,6 +138,7 @@ const SectionRow: React.FC<{
   isViewed: boolean;
   annotationCount: number;
   onSelect: () => void;
+  onOpenToSide?: () => void;
   onDoubleClick?: () => void;
   onToggleViewed?: () => void;
   showViewedControl: boolean;
@@ -152,6 +157,7 @@ const SectionRow: React.FC<{
   isViewed,
   annotationCount,
   onSelect,
+  onOpenToSide,
   onDoubleClick,
   onToggleViewed,
   showViewedControl,
@@ -171,7 +177,14 @@ const SectionRow: React.FC<{
   // is its own state — the primary-colored dot + top-of-section sort carry it.
   return (
     <button
-      onClick={onSelect}
+      onClick={(event) => {
+        if ((event.metaKey || event.ctrlKey) && onOpenToSide) {
+          event.preventDefault();
+          onOpenToSide();
+        } else {
+          onSelect();
+        }
+      }}
       onDoubleClick={onDoubleClick}
       className={`file-tree-item w-full text-left group ${isActive ? 'active' : isScrollActive ? 'scroll-active' : ''} ${annotationCount > 0 ? 'has-annotations' : ''}`}
       style={{ paddingLeft: 8 }}
@@ -207,6 +220,8 @@ export const SectionsPanel: React.FC<SectionsPanelProps> = ({
   activeFileIndex,
   scrollHighlightIndex,
   onSelectFile,
+  onOpenFileToSide,
+  onOpenActiveFileToSide,
   onDoubleClickFile,
   enableKeyboardNav,
   annotations,
@@ -447,6 +462,7 @@ export const SectionsPanel: React.FC<SectionsPanelProps> = ({
         isViewed={viewedFiles.has(item.file.path)}
         annotationCount={annotationCounts.get(item.file.path) ?? 0}
         onSelect={() => onSelectFile(item.index)}
+        onOpenToSide={onOpenFileToSide ? () => onOpenFileToSide(item.file.path) : undefined}
         onDoubleClick={onDoubleClickFile ? () => onDoubleClickFile(item.index) : undefined}
         onToggleViewed={onToggleViewed ? () => onToggleViewed(item.file.path) : undefined}
         showViewedControl={showViewedControls}
@@ -458,6 +474,11 @@ export const SectionsPanel: React.FC<SectionsPanelProps> = ({
         onStage={onStageFile ? () => onStageFile(item.file.path) : undefined}
       />
     ));
+
+  const openActiveFileToSide = useCallback(() => {
+    const file = files[activeFileIndex];
+    if (file) onOpenFileToSide?.(file.path);
+  }, [activeFileIndex, files, onOpenFileToSide]);
 
   const sectionHeader = (group: SectionGroup) => (
     <button
@@ -482,6 +503,7 @@ export const SectionsPanel: React.FC<SectionsPanelProps> = ({
       stagedCount={stagedCount}
       isSearchVisible={isSearchVisible}
       onOpenSearch={onOpenSearch}
+      onOpenActiveFileToSide={onOpenActiveFileToSide ?? (onOpenFileToSide && files[activeFileIndex] ? openActiveFileToSide : undefined)}
       onToggleHideViewed={onToggleHideViewed}
       hideViewedFiles={hideViewedFiles}
       viewedCount={viewedFiles.size}

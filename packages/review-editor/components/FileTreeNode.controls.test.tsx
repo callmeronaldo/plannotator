@@ -26,7 +26,10 @@ const node: FileTreeNode = {
   },
 };
 
-function Row({ compact }: { compact: boolean }) {
+function Row({ compact, onOpenFileToSide }: {
+  compact: boolean;
+  onOpenFileToSide?: (filePath: string) => void;
+}) {
   return (
     <FileTreeNodeItem
       node={node}
@@ -34,6 +37,7 @@ function Row({ compact }: { compact: boolean }) {
       onToggleFolder={() => {}}
       activeFileIndex={0}
       onSelectFile={() => {}}
+      onOpenFileToSide={onOpenFileToSide}
       viewedFiles={new Set()}
       onToggleViewed={() => {}}
       showViewedControls={!compact}
@@ -55,6 +59,24 @@ afterEach(async () => {
 });
 
 describe('FileTreeNodeItem compact controls', () => {
+  test.skipIf(!hasDom)('opens a file to the side from a modifier click', async () => {
+    let openedPath = '';
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+
+    await act(async () => root?.render(<Row compact={false} onOpenFileToSide={(path) => { openedPath = path; }} />));
+    const row = host.querySelector<HTMLButtonElement>('button.file-tree-item');
+    expect(row).not.toBeNull();
+    expect(host.querySelector('[data-open-file-to-side]')).toBeNull();
+
+    await act(async () => {
+      row!.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    });
+
+    expect(openedPath).toBe(node.path);
+  });
+
   test.skipIf(!hasDom)('removes viewed and Git add controls without removing the file row', async () => {
     host = document.createElement('div');
     document.body.appendChild(host);

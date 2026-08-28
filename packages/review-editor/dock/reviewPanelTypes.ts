@@ -18,6 +18,14 @@ export const REVIEW_PANEL_TYPES = {
 
 export const REVIEW_DIFF_PANEL_ID = 'review-diff';
 
+/** The primary tab keeps the bare id; side-by-side comparison panels mint
+ *  per-file ids so several files can be shown at once. */
+const SPLIT_DIFF_PANEL_PREFIX = 'review-diff:';
+
+export function makeSplitDiffPanelId(filePath: string): string {
+  return `${SPLIT_DIFF_PANEL_PREFIX}${filePath}`;
+}
+
 export interface ReviewDiffPanelParams {
   filePath: string;
 }
@@ -33,7 +41,7 @@ export const REVIEW_SEMANTIC_DIFF_PANEL_ID = 'review-semantic-diff';
 export const REVIEW_CALL_FLOW_PANEL_ID = 'review-call-flow';
 
 export function isReviewDiffPanelId(panelId: string): boolean {
-  return panelId === REVIEW_DIFF_PANEL_ID;
+  return panelId === REVIEW_DIFF_PANEL_ID || panelId.startsWith(SPLIT_DIFF_PANEL_PREFIX);
 }
 
 export function getReviewDiffPanelFilePath(

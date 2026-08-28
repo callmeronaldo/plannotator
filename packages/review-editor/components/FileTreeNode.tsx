@@ -10,6 +10,8 @@ interface FileTreeNodeProps {
   onToggleFolder: (path: string) => void;
   activeFileIndex: number;
   onSelectFile: (index: number) => void;
+  /** Opens this file in a new dock group to the right of the active panel. */
+  onOpenFileToSide?: (filePath: string) => void;
   onDoubleClickFile?: (index: number) => void;
   viewedFiles: Set<string>;
   onToggleViewed?: (filePath: string) => void;
@@ -54,6 +56,7 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
   onToggleFolder,
   activeFileIndex,
   onSelectFile,
+  onOpenFileToSide,
   onDoubleClickFile,
   viewedFiles,
   onToggleViewed,
@@ -113,6 +116,7 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
             onToggleFolder={onToggleFolder}
             activeFileIndex={activeFileIndex}
             onSelectFile={onSelectFile}
+            onOpenFileToSide={onOpenFileToSide}
             onDoubleClickFile={onDoubleClickFile}
             viewedFiles={viewedFiles}
             onToggleViewed={onToggleViewed}
@@ -157,10 +161,18 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
       <ContextMenu.Trigger
         render={
           <button
-            onClick={() => onSelectFile(node.fileIndex!)}
+            onClick={(event) => {
+              if ((event.metaKey || event.ctrlKey) && onOpenFileToSide) {
+                event.preventDefault();
+                onOpenFileToSide(node.path);
+              } else {
+                onSelectFile(node.fileIndex!);
+              }
+            }}
             onDoubleClick={() => onDoubleClickFile?.(node.fileIndex!)}
             className={`file-tree-item w-full text-left group ${isActive ? 'active' : isScrollActive ? 'scroll-active' : ''} ${annotationCount > 0 ? 'has-annotations' : ''} ${isStaged && !sinceBaseMode ? 'staged' : ''}`}
             style={{ paddingLeft }}
+            title={onOpenFileToSide ? 'Ctrl/Cmd-click or right-click to open to the side' : undefined}
           />
         }
       >
@@ -196,6 +208,14 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className="min-w-[160px] bg-popover text-popover-foreground border border-border rounded shadow-lg overflow-hidden py-1 transition-opacity data-starting-style:opacity-0 data-ending-style:opacity-0">
+          {onOpenFileToSide && (
+            <ContextMenu.Item
+              onClick={() => onOpenFileToSide(node.path)}
+              className="flex items-center gap-2 mx-1 px-2 py-1.5 text-xs rounded cursor-pointer outline-none text-foreground/80 data-[highlighted]:bg-muted data-[highlighted]:text-foreground"
+            >
+              Open to the side
+            </ContextMenu.Item>
+          )}
           <ContextMenu.Item
             onClick={() => { void copyTextToClipboard(node.path); }}
             className="flex items-center gap-2 mx-1 px-2 py-1.5 text-xs rounded cursor-pointer outline-none text-foreground/80 data-[highlighted]:bg-muted data-[highlighted]:text-foreground"

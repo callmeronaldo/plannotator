@@ -101,6 +101,7 @@ import {
   REVIEW_PANEL_TYPES,
   REVIEW_DIFF_PANEL_ID,
   makeReviewAgentJobPanelId,
+  makeSplitDiffPanelId,
   getReviewDiffPanelFilePath,
   isReviewDiffPanelId,
   REVIEW_PR_OVERVIEW_PANEL_ID,
@@ -728,6 +729,54 @@ const ReviewApp: React.FC = () => {
     needsInitialDiffPanel.current = false;
   }, [dockApi, files, clearPendingSelection]);
 
+  // Side-by-side file comparison: opens the file as its OWN dock panel to the
+  // right of whatever is active (the primary focused tab, the all-files view,
+  // or another comparison panel), instead of replacing the primary tab's
+  // content. Re-opening the same file to the side just focuses its panel. Each
+  // panel is a full DiffViewer — the active one owns focus-driven affordances
+  // (Mod+F find, per-file search state) exactly like the primary tab does.
+  const openDiffFileToSide = useCallback((filePath: string) => {
+    const file = files.find(candidate => candidate.path === filePath || candidate.oldPath === filePath);
+    if (!dockApi || !file) return;
+    const resolvedFilePath = file.path;
+    semanticDiffAutoFallbackPending.current = false;
+    const activeFilePath = getReviewDiffPanelFilePath(dockApi.activePanel?.params);
+    if (activeFilePath === resolvedFilePath) return;
+    clearPendingSelection();
+    const panelId = makeSplitDiffPanelId(resolvedFilePath);
+    const existing = dockApi.getPanel(panelId);
+    if (existing) {
+      existing.api.setActive();
+    } else {
+      const reference = dockApi.activePanel?.id;
+      dockApi.addPanel({
+        id: panelId,
+        component: REVIEW_PANEL_TYPES.DIFF,
+        title: getFileTabTitle(file.path),
+        params: { filePath: resolvedFilePath },
+        ...(reference ? { position: { referencePanel: reference, direction: 'right' as const } } : {}),
+      });
+    }
+    const fileIndex = files.findIndex(candidate => candidate.path === resolvedFilePath);
+    if (fileIndex !== -1) {
+      setActiveFileIndex(fileIndex);
+    }
+    needsInitialDiffPanel.current = false;
+  }, [dockApi, files, clearPendingSelection]);
+
+  // Every diff panel — the primary tab AND any side-by-side comparison
+  // panels — renders one snapshot's patch. A diff switch/refresh replaces that
+  // snapshot, so all of them must close, not just the primary tab (a leftover
+  // comparison panel would keep showing the previous diff's stale content).
+  const closeAllDiffPanels = useCallback(() => {
+    if (!dockApi) return;
+    for (const panel of [...dockApi.panels]) {
+      if (isReviewDiffPanelId(panel.id)) {
+        panel.api.close();
+      }
+    }
+  }, [dockApi]);
+
   const isCallFlowNodeInPatch = useCallback((node: CallFlowNode): boolean => {
     if (!node.file || !node.line) return false;
     const file = files.find((candidate) => candidate.path === node.file || candidate.oldPath === node.file);
@@ -978,6 +1027,8 @@ const ReviewApp: React.FC = () => {
         ? REVIEW_SEMANTIC_DIFF_PANEL_ID
         : isAllFilesActive
         ? REVIEW_ALL_FILES_PANEL_ID
+        : isDiffPanelActive && dockApi.activePanel
+        ? dockApi.activePanel.id
         : REVIEW_DIFF_PANEL_ID;
       dockApi.addPanel({
         id: REVIEW_CODE_NAV_PANEL_ID,
@@ -987,7 +1038,7 @@ const ReviewApp: React.FC = () => {
         initialHeight: 250,
       });
     }
-  }, [codeNav.resolve, dockApi, isAllFilesActive, isCallFlowActive, isSemanticDiffActive, gitContext, agentCwd]);
+  }, [codeNav.resolve, dockApi, isAllFilesActive, isCallFlowActive, isSemanticDiffActive, isDiffPanelActive, gitContext, agentCwd]);
 
   // Check AI capabilities only after /api/diff confirms AI is enabled.
   useEffect(() => {
@@ -2254,7 +2305,7 @@ const ReviewApp: React.FC = () => {
     const isPRSwitch = !!data.prMetadata;
     setSnapshotId(data.snapshotId);
     const nextFiles = parseDiffToFiles(data.rawPatch);
-    dockApi?.getPanel(REVIEW_DIFF_PANEL_ID)?.api.close();
+    closeAllDiffPanels();
     needsInitialDiffPanel.current = true;
     setDiffData(prev => prev ? { ...prev, rawPatch: data.rawPatch, gitRef: data.gitRef, aiReviewContext: data.aiReviewContext } : prev);
     setFiles(nextFiles);
@@ -2400,7 +2451,7 @@ const ReviewApp: React.FC = () => {
         // stale overrides would fight the fresh snapshot.
         resetStagedFiles();
       } else {
-        dockApi?.getPanel(REVIEW_DIFF_PANEL_ID)?.api.close();
+        closeAllDiffPanels();
         needsInitialDiffPanel.current = true;
         setDiffData(prev => prev ? { ...prev, rawPatch: data.rawPatch, gitRef: data.gitRef, diffType: data.diffType, aiReviewContext: data.aiReviewContext } : prev);
         setFiles(nextFiles);
@@ -2443,7 +2494,7 @@ const ReviewApp: React.FC = () => {
     } finally {
       setIsLoadingDiff(false);
     }
-  }, [dockApi, resetStagedFiles, selectedBase, selectedCompareBranch, selectedCompareCommit, diffHideWhitespace, files, activeFileIndex, openDiffFile, applySemanticDiffAdvert, applyCallFlowAdvert, clearPendingSelection]);
+  }, [dockApi, closeAllDiffPanels, resetStagedFiles, selectedBase, selectedCompareBranch, selectedCompareCommit, diffHideWhitespace, files, activeFileIndex, openDiffFile, applySemanticDiffAdvert, applyCallFlowAdvert, clearPendingSelection]);
 
   // Switch Branch 1 in the two-branch comparison. Legacy base-dependent
   // modes still use this handler when an older session restores them.
@@ -4160,6 +4211,11 @@ const ReviewApp: React.FC = () => {
                 activeFileIndex={isAllFilesActive || isSemanticDiffActive || isCallFlowActive || isPROverviewActive ? -1 : activeFileIndex}
                 scrollHighlightIndex={isAllFilesActive && allFilesVisibleFile ? files.findIndex(f => f.path === allFilesVisibleFile) : undefined}
                 onSelectFile={(index) => completeNavigatorSelection(() => handleFilePreview(index))}
+                onOpenFileToSide={(path) => completeNavigatorSelection(() => openDiffFileToSide(path))}
+                onOpenActiveFileToSide={files[activeFileIndex] ? () => {
+                  const file = files[activeFileIndex];
+                  if (file) completeNavigatorSelection(() => openDiffFileToSide(file.path));
+                } : undefined}
                 onDoubleClickFile={(index) => completeNavigatorSelection(() => handleFilePinned(index))}
                 enableKeyboardNav={!showExportModal && hasSearchableFiles}
                 annotations={allAnnotations}
@@ -4267,6 +4323,11 @@ const ReviewApp: React.FC = () => {
                 isAllFilesActive={isAllFilesActive}
                 scrollHighlightIndex={isAllFilesActive && allFilesVisibleFile ? files.findIndex(f => f.path === allFilesVisibleFile) : undefined}
                 onSelectFile={(index) => completeNavigatorSelection(() => handleFilePreview(index))}
+                onOpenFileToSide={(path) => completeNavigatorSelection(() => openDiffFileToSide(path))}
+                onOpenActiveFileToSide={files[activeFileIndex] ? () => {
+                  const file = files[activeFileIndex];
+                  if (file) completeNavigatorSelection(() => openDiffFileToSide(file.path));
+                } : undefined}
                 onDoubleClickFile={(index) => completeNavigatorSelection(() => handleFilePinned(index))}
                 annotations={allAnnotations}
                 viewedFiles={viewedFiles}
