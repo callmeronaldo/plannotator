@@ -131,6 +131,7 @@ jobs:
           packages/review-editor/components/CallFlowTreeView.interaction.test.tsx
           packages/review-editor/components/PanelChrome.test.tsx
           packages/review-editor/components/FileTree.search-placement.test.tsx
+          packages/review-editor/components/FileTree.performance.test.tsx
           packages/review-editor/components/FileTreeNode.controls.test.tsx
           packages/ui/components/Settings.analysis.test.tsx
           packages/ui/components/AnnotationPanel.props.test.tsx

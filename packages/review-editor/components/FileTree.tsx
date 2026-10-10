@@ -1,4 +1,5 @@
 import React, { useEffect, useCallback, useState, useMemo } from 'react';
+import { useStableCallback } from '@pierre/diffs/react';
 import { CodeAnnotation } from '@plannotator/ui/types';
 import type {
   AvailableBranches,
@@ -310,6 +311,15 @@ export const FileTree: React.FC<FileTreeProps> = ({
     [annotationCountMap],
   );
 
+  // App's navigator adapters can change identity without changing row UI.
+  // Dispatch through stable callbacks, keeping the latest committed handlers
+  // and preserving optional action availability at the row boundary.
+  const selectFile = useStableCallback((index: number) => onSelectFile(index));
+  const openFileToSide = useStableCallback((path: string) => onOpenFileToSide?.(path));
+  const doubleClickFile = useStableCallback((index: number) => onDoubleClickFile?.(index));
+  const toggleViewed = useStableCallback((path: string) => onToggleViewed?.(path));
+  const stageFile = useStableCallback((path: string) => onStageFile?.(path));
+
   const expandedFolders = new Set<string>();
   const handleToggleFolder = useCallback((_path: string) => {}, []);
   const areAllFoldersExpanded = false;
@@ -594,18 +604,18 @@ export const FileTree: React.FC<FileTreeProps> = ({
                       : activeFileIndex
                   }
                   scrollHighlightIndex={isAllFilesActive ? scrollHighlightIndex : undefined}
-                  onSelectFile={onSelectFile}
-                  onOpenFileToSide={onOpenFileToSide}
-                  onDoubleClickFile={onDoubleClickFile}
+                  onSelectFile={selectFile}
+                  onOpenFileToSide={onOpenFileToSide ? openFileToSide : undefined}
+                  onDoubleClickFile={onDoubleClickFile ? doubleClickFile : undefined}
                   viewedFiles={viewedFiles}
-                  onToggleViewed={onToggleViewed}
+                  onToggleViewed={onToggleViewed ? toggleViewed : undefined}
                   showViewedControls={showViewedControls}
                   hideViewedFiles={hideViewedFiles}
                   getAnnotationCount={getAnnotationCount}
                   stagedFiles={stagedFiles}
                   repoRoot={repoRoot}
                   getSectionEntry={getSectionEntry}
-                  onStageFile={onStageFile}
+                  onStageFile={onStageFile ? stageFile : undefined}
                   stagingFile={stagingFile}
                   showStageControls={showStageControls}
                 />

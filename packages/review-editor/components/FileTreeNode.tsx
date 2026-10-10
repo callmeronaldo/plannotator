@@ -33,6 +33,27 @@ interface FileTreeNodeProps {
   showStageControls?: boolean;
 }
 
+type FileTreeFileRowProps = Pick<FileTreeNodeProps,
+  | 'node'
+  | 'onSelectFile'
+  | 'onOpenFileToSide'
+  | 'onDoubleClickFile'
+  | 'onToggleViewed'
+  | 'showViewedControls'
+  | 'repoRoot'
+  | 'onStageFile'
+  | 'showStageControls'
+> & {
+  isActive: boolean;
+  isScrollActive: boolean;
+  isViewed: boolean;
+  isStaged: boolean;
+  isStaging: boolean;
+  annotationCount: number;
+  sinceBaseMode: boolean;
+  sectionGroup?: 'committed' | 'changes' | 'untracked';
+};
+
 function hasVisibleChildren(
   node: TreeNode,
   viewedFiles: Set<string>,
@@ -136,25 +157,62 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
     );
   }
 
-  // File node
   const isActive = node.fileIndex === activeFileIndex;
-  const isScrollActive = !isActive && scrollHighlightIndex != null && node.fileIndex === scrollHighlightIndex;
   const isViewed = viewedFiles.has(node.path);
-  const isStaged = stagedFiles.has(node.path);
-  const annotationCount = getAnnotationCount(node.path);
-  // Since-base mode: sidecar-driven markers (U for untracked, staged dot,
-  // stage button) replace the legacy staged treatment for this row.
-  const sectionEntry = getSectionEntry?.(node.path);
-  const sinceBaseMode = getSectionEntry != null;
-  const isUntracked = sectionEntry?.group === 'untracked';
-  // isStaged comes from the EFFECTIVE set (sidecar + session overrides) —
-  // the sidecar's own snapshot flag must never be ORed back in, or a file
-  // unstaged this session would render staged and invert the next toggle.
-  const isStageable = sinceBaseMode && !!onStageFile && sectionEntry != null && sectionEntry.group !== 'committed';
-
   if (hideViewedFiles && isViewed && !isActive) {
     return null;
   }
+
+  // Project current shared state into row-local values before memoizing the
+  // menu/tooltip subtree. A global index change must not invalidate every row,
+  // and comparing Set/sidecar identities would miss in-place value changes.
+  return (
+    <FileTreeFileRow
+      node={node}
+      isActive={isActive}
+      isScrollActive={!isActive && scrollHighlightIndex != null && node.fileIndex === scrollHighlightIndex}
+      isViewed={isViewed}
+      isStaged={stagedFiles.has(node.path)}
+      isStaging={stagingFile === node.path}
+      annotationCount={getAnnotationCount(node.path)}
+      sinceBaseMode={getSectionEntry != null}
+      sectionGroup={getSectionEntry?.(node.path)?.group}
+      onSelectFile={onSelectFile}
+      onOpenFileToSide={onOpenFileToSide}
+      onDoubleClickFile={onDoubleClickFile}
+      onToggleViewed={onToggleViewed}
+      showViewedControls={showViewedControls}
+      repoRoot={repoRoot}
+      onStageFile={onStageFile}
+      showStageControls={showStageControls}
+    />
+  );
+};
+
+const FileTreeFileRow = React.memo(function FileTreeFileRow({
+  node,
+  isActive,
+  isScrollActive,
+  isViewed,
+  isStaged,
+  isStaging,
+  annotationCount,
+  sinceBaseMode,
+  sectionGroup,
+  onSelectFile,
+  onOpenFileToSide,
+  onDoubleClickFile,
+  onToggleViewed,
+  showViewedControls,
+  repoRoot,
+  onStageFile,
+  showStageControls,
+}: FileTreeFileRowProps) {
+  const paddingLeft = 4 + node.depth * 8;
+  const isUntracked = sectionGroup === 'untracked';
+  // The sidecar's staged flag is only a snapshot; render the effective set's
+  // projected isStaged value, including files unstaged during this session.
+  const isStageable = sinceBaseMode && !!onStageFile && sectionGroup != null && sectionGroup !== 'committed';
 
   return (
     <ContextMenu.Root>
@@ -188,10 +246,10 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
               sinceBaseMode && (isStageable || isStaged) ? (
                 <StageControl
                   isStaged={isStaged}
-                  isStaging={stagingFile === node.path}
+                  isStaging={isStaging}
                   onStage={onStageFile ? () => onStageFile(node.path) : undefined}
                 />
-              ) : sinceBaseMode && sectionEntry?.group === 'committed' ? (
+              ) : sinceBaseMode && sectionGroup === 'committed' ? (
                 <CommittedDot />
               ) : sinceBaseMode && onStageFile ? (
                 <span className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
@@ -241,4 +299,4 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
       </ContextMenu.Portal>
     </ContextMenu.Root>
   );
-};
+});
