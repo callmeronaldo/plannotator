@@ -1,4 +1,4 @@
-export type LineSelectionSource = 'range-gesture' | 'gutter-comment-action';
+export type LineSelectionSource = 'range-gesture' | 'text-selection' | 'gutter-comment-action';
 
 export type LineSelectionBehavior = 'preserve-selection' | 'open-composer';
 
@@ -9,14 +9,15 @@ interface ResolveLineSelectionBehaviorOptions {
 
 /**
  * Keep mobile range acquisition separate from writing, matching DiffsHub.
- * Desktop retains its incumbent selection-to-composer flow, while the
- * contextual gutter action always represents an explicit writing intent.
+ * Native code-text selection always remains copyable. Desktop gutter drags
+ * keep their selection-to-composer flow; the gutter comment action is explicit
+ * writing intent on every surface.
  */
 export function resolveLineSelectionBehavior({
   source,
   compactTouchLayout,
 }: ResolveLineSelectionBehaviorOptions): LineSelectionBehavior {
-  if (compactTouchLayout && source === 'range-gesture') {
+  if (source === 'text-selection' || (compactTouchLayout && source === 'range-gesture')) {
     return 'preserve-selection';
   }
   return 'open-composer';

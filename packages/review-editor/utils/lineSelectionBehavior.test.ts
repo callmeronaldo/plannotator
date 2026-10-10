@@ -16,7 +16,16 @@ describe('resolveLineSelectionBehavior', () => {
     })).toBe('open-composer');
   });
 
-  test('preserves the incumbent desktop selection-to-composer behavior', () => {
+  test('native text selection preserves copy behavior on both desktop and compact touch', () => {
+    for (const compactTouchLayout of [false, true]) {
+      expect(resolveLineSelectionBehavior({
+        source: 'text-selection',
+        compactTouchLayout,
+      })).toBe('preserve-selection');
+    }
+  });
+
+  test('preserves the incumbent desktop gutter-selection-to-composer behavior', () => {
     expect(resolveLineSelectionBehavior({
       source: 'range-gesture',
       compactTouchLayout: false,

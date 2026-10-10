@@ -9,6 +9,7 @@ let codeViewUnmounts = 0;
 let scrollTargets: Array<Record<string, unknown>> = [];
 let lastCodeViewProps: Record<string, unknown> | null = null;
 let toolbarSelections: Array<SelectedLineRange | null> = [];
+let workerPoolReady = true;
 
 // Captured BEFORE the mocks below replace the specifiers, so this file can put
 // the real modules back when it is done. `mock.module` is process global and
@@ -29,7 +30,7 @@ const realPierreDiffsReact = { ...(await import('@pierre/diffs/react')) };
 const realResolveSyntaxTheme = (await import('@plannotator/ui/utils/syntaxTheme')).resolveSyntaxTheme;
 
 mock.module('../workerPool', () => ({
-  useIsWorkerPoolReadyOrDisabled: () => true,
+  useIsWorkerPoolReadyOrDisabled: () => workerPoolReady,
   useWorkerPoolThemeSync: () => {},
 }));
 
@@ -176,6 +177,7 @@ afterEach(async () => {
   scrollTargets = [];
   lastCodeViewProps = null;
   toolbarSelections = [];
+  workerPoolReady = true;
 });
 
 // Hand the real @pierre/diffs back to the process. Only the two library
@@ -336,7 +338,60 @@ describe('AllFilesCodeView compact-touch line selection', () => {
     expect(toolbarSelections).toEqual([range]);
   });
 
-  test.skipIf(!hasDom)('keeps the incumbent desktop selection-to-composer transition', async () => {
+  test.skipIf(!hasDom)('native text selection in a recycled file surface stays copyable and comments keep the old side', async () => {
+    const observed: Array<SelectedLineRange | null> = [];
+    const onSelection = (range: SelectedLineRange | null) => observed.push(range);
+    // The real worker pool gates CodeView's first mount. Listening only on the
+    // initial effect misses its asynchronously-created scroll container.
+    workerPoolReady = false;
+    await mount(false, onSelection);
+    expect(codeViewMounts).toBe(0);
+    workerPoolReady = true;
+    await act(async () => {
+      root!.render(<Harness compactTouchLayout={false} onSelection={onSelection} />);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    });
+    const { options, item } = getSelectionCallbacks();
+    const node = document.createElement('diffs-container');
+    const shadow = node.shadowRoot ?? node.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<code data-unified><div data-line="40" data-line-type="change-deletion">removed first\n</div><div data-line="42" data-line-type="change-deletion">removed last\n</div></code>';
+    host!.querySelector('[data-diff-overview-content] > div')!.appendChild(node);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(async () => Response.json({ oldContent: null, newContent: null }), originalFetch);
+    try {
+      const callbacks = lastCodeViewProps?.options as {
+        onPostRender: (node: HTMLElement, instance: unknown, phase: string, context: { item: typeof item }) => void;
+      };
+      await act(async () => { callbacks.onPostRender(node, {}, 'mount', { item }); });
+      const selection = window.getSelection()!;
+      const nativeRange = document.createRange();
+      nativeRange.setStart(shadow.querySelector('[data-line="40"]')!.firstChild!, 0);
+      const last = shadow.querySelector('[data-line="42"]')!.firstChild!;
+      nativeRange.setEnd(last, last.textContent!.length);
+      selection.removeAllRanges();
+      selection.addRange(nativeRange);
+      const copiedText = selection.toString();
+      expect(copiedText).toContain('removed first');
+      await act(async () => {
+        node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, composed: true }));
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      });
+      const range: SelectedLineRange = { start: 40, end: 42, side: 'deletions' };
+      expect(toolbarSelections).toEqual([]);
+      expect(selection.isCollapsed).toBe(false);
+      expect(selection.toString()).toBe(copiedText);
+      expect(observed.at(-1)).toEqual(range);
+      expect(lastCodeViewProps?.selectedLines).toEqual({ id: item.id, range });
+
+      await act(async () => { options.onGutterUtilityClick?.(range, { item }); });
+      expect(toolbarSelections).toEqual([range]);
+      selection.removeAllRanges();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test.skipIf(!hasDom)('keeps the incumbent desktop gutter-selection-to-composer transition', async () => {
     const range: SelectedLineRange = { start: 4, end: 8, side: 'additions' };
     await mount(false);
     const { options, item } = getSelectionCallbacks();

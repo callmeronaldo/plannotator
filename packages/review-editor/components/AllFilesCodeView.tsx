@@ -1562,24 +1562,24 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     },
   );
 
-  // Parity with DiffViewer: dragging a text selection across multiple lines of
-  // diff CONTENT (not the line-number gutter) opens the annotation toolbar for
-  // that range. CodeView's enableLineSelection only starts drags from the
-  // number column, so without this the all-files surface would silently lose
-  // the select-code-text-to-annotate interaction the single-file panel has.
+  // Native code-text selection stays copyable; it only publishes a source-side
+  // range for the explicit gutter comment action, never auto-opens the composer.
+  // CodeView's enableLineSelection only starts drags from the number column.
   // The owning file comes from the selection's shadow-root host element (each
   // item renders into its own <diffs-container>), mapped via nodeToItemIdRef.
   const handleContentTextSelection = useStableCallback(() => {
     requestAnimationFrame(() => {
+      if (readOnly) return;
       const root = scrollRef.current;
       const selection = getDiffSelection(root);
       if (!selection || selection.isCollapsed || !selection.toString().trim()) return;
       const anchorLine = getLineNumberFromNode(selection.anchorNode);
       const focusLine = getLineNumberFromNode(selection.focusNode);
       if (anchorLine == null || focusLine == null) return;
-      // Single-line drags keep native copy behavior (same rule as DiffViewer).
-      if (anchorLine === focusLine) return;
       const rootNode = selection.anchorNode?.getRootNode();
+      if (rootNode !== selection.focusNode?.getRootNode()) return;
+      const side = getSideFromNode(selection.anchorNode);
+      if (getSideFromNode(selection.focusNode) !== side) return;
       const host = rootNode instanceof ShadowRoot ? rootNode.host : null;
       const itemId = host instanceof HTMLElement ? nodeToItemIdRef.current.get(host) : undefined;
       if (itemId == null) return;
@@ -1587,28 +1587,26 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       if (itemId === editSession.editingItemIdRef.current) return;
       const filePath = itemIdToFilePath.get(itemId);
       if (filePath == null) return;
-      routeSelectionToToolbar(
-        {
-          start: Math.min(anchorLine, focusLine),
-          end: Math.max(anchorLine, focusLine),
-          side: getSideFromNode(selection.anchorNode),
-        },
-        filePath,
-      );
-      selection.removeAllRanges();
+      const item = viewerRef.current?.getItem(itemId);
+      if (!item || item.type !== 'diff') return;
+      handleLineSelectionInteraction('text-selection', {
+        start: Math.min(anchorLine, focusLine),
+        end: Math.max(anchorLine, focusLine),
+        side,
+      }, item);
+      // Do not clear the native selection or move focus: copying must keep working.
     });
   });
 
-  // (Re)attach on fileSetKey: the CodeView remount recreates the container
-  // element scrollRef points at, dropping any previously-attached listener.
+  // CodeView creates its scroll container after the worker pool becomes ready.
+  // Follow the actual element, not only fileSetKey, so text selection works on
+  // that deferred first mount and after later container replacements.
   useEffect(() => {
-    const root = scrollRef.current;
-    if (!root) return;
+    if (!scrollEl) return;
     const handler = () => handleContentTextSelection();
-    root.addEventListener('mouseup', handler, true);
-    return () => root.removeEventListener('mouseup', handler, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileSetKey]);
+    scrollEl.addEventListener('mouseup', handler, true);
+    return () => scrollEl.removeEventListener('mouseup', handler, true);
+  }, [scrollEl, handleContentTextSelection]);
 
   // Abort all in-flight content fetches on unmount.
   useEffect(() => {

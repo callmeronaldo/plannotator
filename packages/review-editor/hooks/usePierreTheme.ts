@@ -169,6 +169,14 @@ export function buildLineBgOverrides(intensity: DiffLineBgIntensity, mode: 'ligh
   `;
 }
 
+// Pierre's negative right margin moves the + button over the first code
+// character. A mouse drag starting at that character then hits the comment
+// action instead of the text. Keep it inside the gutter on desktop layouts
+// without changing the compact-touch hit target.
+const COPY_SAFE_GUTTER_UTILITY_CSS = `
+  [data-utility-button] { margin-right: 0; }
+`;
+
 /**
  * Pierre's gutter comment button (`[data-utility-button]`) is `1lh` square —
  * 20px at the default line height — plus a 4px leftward bleed on its invisible
@@ -208,7 +216,7 @@ export function usePierreTheme(options?: {
   const fontSize = options?.fontSize;
   const showFileHeader = options?.showFileHeader ?? false;
   const compactTouchLayout = options?.compactTouchLayout === true;
-  const compactTouchCSS = compactTouchLayout ? COMPACT_TOUCH_GUTTER_UTILITY_CSS : '';
+  const gutterUtilityCSS = compactTouchLayout ? COMPACT_TOUCH_GUTTER_UTILITY_CSS : COPY_SAFE_GUTTER_UTILITY_CSS;
   const lineBgIntensity = useConfigValue('diffLineBgIntensity');
 
   const [pierreTheme, setPierreTheme] = useState<PierreTheme>(() => {
@@ -226,7 +234,7 @@ export function usePierreTheme(options?: {
       [data-separator='line-info'], [data-separator='line-info-basic'] { height: 24px !important; }
       [data-separator='line-info'] { margin-block: 4px !important; }
       ${buildLineBgOverrides(lineBgIntensity, resolvedMode ?? 'dark')}
-      ${compactTouchCSS}
+      ${gutterUtilityCSS}
     `};
   });
 
@@ -343,11 +351,11 @@ export function usePierreTheme(options?: {
 
           ${buildLineBgOverrides(lineBgIntensity, resolvedMode)}
 
-          ${compactTouchCSS}
+          ${gutterUtilityCSS}
         `,
       });
     });
-  }, [resolvedMode, colorTheme, fontFamily, fontSize, showFileHeader, lineBgIntensity, compactTouchCSS]);
+  }, [resolvedMode, colorTheme, fontFamily, fontSize, showFileHeader, lineBgIntensity, gutterUtilityCSS]);
 
   return pierreTheme;
 }

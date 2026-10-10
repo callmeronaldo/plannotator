@@ -24,6 +24,7 @@ import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test';
 import React, { act, useCallback, useImperativeHandle, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { SelectedLineRange } from '@plannotator/ui/types';
+import type { DiffTokenEventBaseProps } from '@pierre/diffs';
 
 interface CapturedFileDiffProps {
   selectedLines?: SelectedLineRange;
@@ -31,11 +32,13 @@ interface CapturedFileDiffProps {
     onLineSelectionEnd?: (range: SelectedLineRange | null) => void;
     onLineSelectionChange?: (range: SelectedLineRange | null) => void;
     onGutterUtilityClick?: (range: SelectedLineRange) => void;
+    onTokenClick?: (props: DiffTokenEventBaseProps, event: MouseEvent) => void;
   };
 }
 
 let lastFileDiffProps: CapturedFileDiffProps | null = null;
 let toolbarSelections: Array<SelectedLineRange | null> = [];
+let toolbarTokenClicks = 0;
 
 // Spread-captured before the mock replaces the module record — a bare namespace
 // handle would be a live view of the record `mock.module` rewrites, so the
@@ -61,7 +64,13 @@ mock.module('@pierre/diffs/react', () => ({
   ...realPierreDiffsReact,
   FileDiff: function MockFileDiff(props: CapturedFileDiffProps) {
     lastFileDiffProps = props;
-    return null;
+    return (
+      <code data-unified>
+        {[40, 41, 42].map(line => (
+          <div key={line} data-line={line} data-line-type="change-deletion"><span>{`removed ${line}\n`}</span></div>
+        ))}
+      </code>
+    );
   },
 }));
 
@@ -72,7 +81,7 @@ mock.module('./ToolbarHost', () => ({
         toolbarSelections.push(range);
       },
       openLineAnnotation: () => {},
-      handleTokenClick: () => {},
+      handleTokenClick: () => { toolbarTokenClicks += 1; },
       startEdit: () => {},
     }));
     return null;
@@ -136,10 +145,10 @@ describe.if(hasDom)('DiffViewer compact-touch line selection (DOM)', () => {
   const originalFetch = globalThis.fetch;
 
   async function mount(compactTouchLayout: boolean) {
-    globalThis.fetch = (async () =>
+    globalThis.fetch = Object.assign(async () =>
       new Response(JSON.stringify({ oldContent: null, newContent: null }), {
         headers: { 'content-type': 'application/json' },
-      })) as typeof fetch;
+      }), originalFetch);
     const selections: Array<SelectedLineRange | null> = [];
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -170,6 +179,8 @@ describe.if(hasDom)('DiffViewer compact-touch line selection (DOM)', () => {
     host = null;
     lastFileDiffProps = null;
     toolbarSelections = [];
+    toolbarTokenClicks = 0;
+    window.getSelection()?.removeAllRanges();
     globalThis.fetch = originalFetch;
   });
 
@@ -238,16 +249,67 @@ describe.if(hasDom)('DiffViewer compact-touch line selection (DOM)', () => {
     expect(toolbarSelections).toEqual([null]);
   });
 
-  test('desktop keeps handing completed drags straight to the composer', async () => {
+  test('native deleted-code text selection remains copyable until an explicit comment action', async () => {
+    const observed = await mount(false);
+    // null keeps Pierre controlled from the first paint; undefined would
+    // force a code-DOM rebuild when this native range is first published.
+    expect(pierre().selectedLines).toBeNull();
+    expect(pierre().options.onLineSelectionChange).toBeDefined();
+    const first = host!.querySelector('[data-line="40"] span')!.firstChild!;
+    const last = host!.querySelector('[data-line="42"] span')!.firstChild!;
+    const selection = window.getSelection()!;
+    const nativeRange = document.createRange();
+    nativeRange.setStart(first, 0);
+    nativeRange.setEnd(last, last.textContent!.length);
+    selection.removeAllRanges();
+    selection.addRange(nativeRange);
+    const copiedText = selection.toString();
+    expect(copiedText).toContain('removed 40');
+    expect(copiedText).toContain('removed 42');
+
+    await act(async () => {
+      host!.querySelector('[data-line="42"]')!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    });
+
+    const range: SelectedLineRange = { start: 40, end: 42, side: 'deletions' };
+    expect(toolbarSelections).toEqual([]);
+    expect(selection.isCollapsed).toBe(false);
+    expect(selection.toString()).toBe(copiedText);
+    expect(observed.at(-1)).toEqual(range);
+    expect(pierre().selectedLines).toEqual(range);
+    expect(pierre().options.onLineSelectionChange).toBeDefined();
+
+    await act(async () => { pierre().options.onGutterUtilityClick?.(range); });
+    expect(toolbarSelections).toEqual([range]);
+  });
+
+  test('plain token clicks do not open a comment over copy/double-click gestures', async () => {
     await mount(false);
+    const token = host!.querySelector('[data-line="40"] span') as HTMLElement;
+    await act(async () => {
+      pierre().options.onTokenClick?.({
+        type: 'token', lineNumber: 40, side: 'deletions',
+        lineCharStart: 0, lineCharEnd: 7, tokenText: 'removed', tokenElement: token,
+      }, new MouseEvent('click'));
+    });
+    expect(toolbarTokenClicks).toBe(0);
+  });
+
+  test('desktop gutter drags repaint while controlled and open the composer only when complete', async () => {
+    await mount(false);
+
+    // Stable controlled mode avoids destroying a native copy selection. It
+    // also requires in-flight deltas to reach Pierre or gutter drags go blank.
+    await act(async () => {
+      pierre().options.onLineSelectionChange?.(FIRST_DRAG);
+    });
+    expect(pierre().selectedLines).toEqual(FIRST_DRAG);
+    expect(toolbarSelections).toEqual([]);
 
     await act(async () => {
       pierre().options.onLineSelectionEnd?.(FIRST_DRAG);
     });
-
     expect(toolbarSelections).toEqual([FIRST_DRAG]);
-    // Desktop never enters the preserved-range state, so it must not even carry
-    // the controlled-repaint handler.
-    expect('onLineSelectionChange' in pierre().options).toBe(false);
   });
 });

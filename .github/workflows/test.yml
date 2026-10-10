@@ -115,6 +115,7 @@ jobs:
           packages/review-editor/components/AllFilesCodeView.generated.test.tsx
           packages/review-editor/components/DiffViewer.compactTouchSelection.test.tsx
           packages/review-editor/components/DiffViewer.performance.test.tsx
+          packages/review-editor/utils/diffSelection.test.ts
           packages/guide-viewer/GuideSectionCard.test.tsx
           packages/guide-viewer/GuideView.test.tsx
           packages/guide-viewer/GuideViewportManager.test.tsx

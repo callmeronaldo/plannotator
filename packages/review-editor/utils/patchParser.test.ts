@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isLineRangeInPatch } from './patchParser';
+import { extractLinesFromPatch, isLineRangeInPatch } from './patchParser';
 
 const PATCH = [
   '@@ -10,4 +20,5 @@',
@@ -12,6 +12,25 @@ const PATCH = [
   '-before',
   '+after',
 ].join('\n');
+
+describe('extractLinesFromPatch', () => {
+  test('keeps header-like deleted and added code in the selected source range', () => {
+    const patch = [
+      '--- a/code.txt',
+      '+++ b/code.txt',
+      '@@ -40,3 +7,3 @@',
+      '--- removed comment',
+      '+++ added expression',
+      '-old second line',
+      '+new second line',
+      ' context',
+    ].join('\n');
+    expect(extractLinesFromPatch(patch, 40, 41, 'old')).toBe('-- removed comment\nold second line');
+    expect(extractLinesFromPatch(patch, 7, 8, 'new')).toBe('++ added expression\nnew second line');
+    expect(extractLinesFromPatch(patch, 42, 42, 'old')).toBe('context');
+    expect(extractLinesFromPatch(patch, 9, 9, 'new')).toBe('context');
+  });
+});
 
 describe('isLineRangeInPatch', () => {
   test('accepts complete ranges represented by one hunk on the requested side', () => {

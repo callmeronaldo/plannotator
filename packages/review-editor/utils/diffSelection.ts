@@ -19,6 +19,11 @@ export function getSideFromNode(node: Node | null): 'additions' | 'deletions' {
   if (current?.nodeType === Node.TEXT_NODE) current = current.parentNode;
   while (current) {
     if (current instanceof HTMLElement) {
+      // Unified diffs have one data-unified column, so only the row tells
+      // us whether data-line is an old- or new-side source coordinate.
+      const lineType = current.getAttribute('data-line-type');
+      if (lineType === 'change-deletion' || lineType === 'deletion') return 'deletions';
+      if (lineType === 'change-addition' || lineType === 'addition') return 'additions';
       if (current.hasAttribute('data-deletions')) return 'deletions';
       if (current.hasAttribute('data-additions')) return 'additions';
     }

@@ -12,6 +12,7 @@ export function extractLinesFromPatch(
 
   let oldLine = 0;
   let newLine = 0;
+  let inHunk = false;
 
   for (const line of lines) {
     // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
@@ -19,14 +20,12 @@ export function extractLinesFromPatch(
     if (hunkMatch) {
       oldLine = parseInt(hunkMatch[1], 10) - 1;
       newLine = parseInt(hunkMatch[2], 10) - 1;
+      inHunk = true;
       continue;
     }
 
-    // Skip diff headers
-    if (line.startsWith('diff ') || line.startsWith('index ') ||
-        line.startsWith('--- ') || line.startsWith('+++ ')) {
-      continue;
-    }
+    // Inside a hunk, ---/+++ may be source code, not file headers.
+    if (!inHunk) continue;
 
     const prefix = line[0];
     const content = line.substring(1);
