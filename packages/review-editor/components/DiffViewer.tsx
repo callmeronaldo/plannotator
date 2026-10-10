@@ -27,7 +27,7 @@ import { hashString } from '../utils/hashString';
 import { InlineAnnotation } from './InlineAnnotation';
 import { InlineAIMarker } from './InlineAIMarker';
 import type { AIChatEntry } from '../hooks/useAIChat';
-import { findReviewSearchMatches, type ReviewSearchMatch } from '../utils/reviewSearch';
+import { buildSearchIndex, findMatchesInIndex, type ReviewSearchMatch } from '../utils/reviewSearch';
 import {
   applySearchHighlights,
   clearSearchHighlights,
@@ -48,6 +48,11 @@ import type { SuggestionHunk } from '../edit/deriveSuggestions';
 import type { EditSelectionAnnotationRequest, EditSelectionComment } from '../edit/useEditSession';
 import type { PierreEditorOptions } from '../edit/pierreEditAdapter';
 import { isReviewCurrentFileSearchShortcut } from '../hooks/useReviewSearch';
+
+// Stable empty defaults preserve the memoized renderer boundary: changing
+// Find/header controls must not rebuild line annotations and repaint the diff.
+const EMPTY_SEARCH_MATCHES: ReviewSearchMatch[] = [];
+const EMPTY_AI_MESSAGES: AIChatEntry[] = [];
 
 interface PierreDiffContentProps {
   filePath: string;
@@ -293,16 +298,16 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   showStageControls = true,
   stageError,
   searchQuery = '',
-  searchMatches = [],
+  searchMatches = EMPTY_SEARCH_MATCHES,
   activeSearchMatchId = null,
   activeSearchMatch = null,
   aiAvailable = false,
   onAskAI,
   isAILoading = false,
   onViewAIResponse,
-  aiMessages = [],
+  aiMessages = EMPTY_AI_MESSAGES,
   onClickAIMarker,
-  aiHistoryMessages = [],
+  aiHistoryMessages = EMPTY_AI_MESSAGES,
   enableEditSuggestions = false,
   onAddSuggestionsForFile,
   onAddEditorCommentForFile,
@@ -397,16 +402,17 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   // patch must not collide either. See AllFilesCodeView, which mints the same
   // shape of key for the all-files surface (which is why that surface was
   // never affected by this bug).
+  const patchHash = useMemo(() => hashString(patch), [patch]);
   const fileDiff = useMemo(() => {
     const parsed = getSingularPatch(patch);
-    parsed.cacheKey = `${filePath}#${hashString(patch)}`;
+    parsed.cacheKey = `${filePath}#${patchHash}`;
     return parsed;
-  }, [patch, filePath]);
+  }, [patch, filePath, patchHash]);
 
   // Fetch full file contents before mounting Pierre. The request identity is
   // part of both state records so a path/base/snapshot switch cannot paint one
   // frame from the previous file while this effect is waiting to reset state.
-  const fileContentRequestKey = `${filePath}\0${oldPath ?? ''}\0${reviewBase ?? ''}\0${reviewSnapshotId ?? ''}\0${hashString(patch)}`;
+  const fileContentRequestKey = `${filePath}\0${oldPath ?? ''}\0${reviewBase ?? ''}\0${reviewSnapshotId ?? ''}\0${patchHash}`;
   const [fileContents, setFileContents] = useState<{
     forRequest: string;
     old: string | null;
@@ -477,12 +483,12 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       // switches. Without it Pierre keeps painting the partial render forever:
       // gap bars with no chevrons and dead expansion clicks, at every file
       // size. (See the cacheKey note on `fileDiff`.)
-      result.cacheKey = `${filePath}#full#${hashString(patch)}`;
+      result.cacheKey = `${filePath}#full#${patchHash}`;
       return result;
     } catch {
       return fileDiff;
     }
-  }, [patch, filePath, oldPath, fileContents, fileContentRequestKey, fileDiff]);
+  }, [patch, patchHash, filePath, oldPath, fileContents, fileContentRequestKey, fileDiff]);
 
   const fullFileContextState: FullFileContextState = fileContentState === 'ready'
     ? augmentedDiff !== fileDiff && !augmentedDiff.isPartial
@@ -491,7 +497,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     : fileContentState;
 
   const editEnabled = enableEditSuggestions && onAddSuggestionsForFile != null;
-  const editGeneration = `${filePath}:${hashString(patch)}:${reviewBase ?? ''}:${reviewSnapshotId ?? ''}`;
+  const editGeneration = `${filePath}:${patchHash}:${reviewBase ?? ''}:${reviewSnapshotId ?? ''}`;
   const editSession = useSingleFileEditSession({
     enabled: editEnabled,
     file: { path: filePath, oldPath, patch, status: status ?? 'modified' },
@@ -513,12 +519,16 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     [augmentedDiff, diffStyle, editSession.editing],
   );
 
+  // Build only while Find is open, then reuse across query keystrokes.
+  const fileFindIndex = useMemo(
+    () => isFileFindOpen
+      ? buildSearchIndex([{ path: filePath, oldPath, patch, additions: 0, deletions: 0 }])
+      : [],
+    [isFileFindOpen, filePath, oldPath, patch],
+  );
   const fileFindMatches = useMemo(
-    () => findReviewSearchMatches(
-      [{ path: filePath, oldPath, patch, additions: 0, deletions: 0 }],
-      fileFindQuery,
-    ),
-    [fileFindQuery, filePath, oldPath, patch],
+    () => findMatchesInIndex(fileFindIndex, fileFindQuery),
+    [fileFindIndex, fileFindQuery],
   );
   const safeFileFindIndex = fileFindMatches.length > 0
     ? Math.min(activeFileFindIndex, fileFindMatches.length - 1)

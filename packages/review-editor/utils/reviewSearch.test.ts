@@ -60,6 +60,36 @@ describe('reviewSearch', () => {
     ]);
   });
 
+  it('searches header-like source lines without shifting subsequent line numbers', () => {
+    // A removed SQL comment (`-- ...`) and an added prefix increment
+    // (`++ ...`) resemble file headers after the diff marker is prepended.
+    const files: ReviewSearchableDiffFile[] = [{
+      path: 'needle.txt',
+      patch: [
+        'diff --git a/needle.txt b/needle.txt',
+        '--- a/needle.txt',
+        '+++ b/needle.txt',
+        '@@ -4,3 +4,3 @@',
+        '--- needle',
+        '+++ needle',
+        ' needle context',
+        '-old needle',
+        '+new needle',
+      ].join('\n'),
+      additions: 2,
+      deletions: 2,
+    }];
+
+    const matches = findReviewSearchMatches(files, 'needle');
+    expect(matches.map(match => [match.side, match.lineNumber, match.altLineNumber, match.text])).toEqual([
+      ['deletion', 4, undefined, '-- needle'],
+      ['addition', 4, undefined, '++ needle'],
+      ['context', 5, 5, 'needle context'],
+      ['deletion', 6, undefined, 'old needle'],
+      ['addition', 6, undefined, 'new needle'],
+    ]);
+  });
+
   it('matches case-insensitively and keeps snippet context', () => {
     const [match] = findReviewSearchMatches(diffFiles, 'SEARCHTERM');
 

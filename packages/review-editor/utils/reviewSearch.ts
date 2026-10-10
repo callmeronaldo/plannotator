@@ -1,19 +1,5 @@
 export type ReviewSearchSide = 'addition' | 'deletion' | 'context';
 
-const DIFF_METADATA_PREFIXES = [
-  'diff ',
-  'index ',
-  '--- ',
-  '+++ ',
-  'new file mode ',
-  'deleted file mode ',
-  'similarity index ',
-  'rename from ',
-  'rename to ',
-  'old mode ',
-  'new mode ',
-] as const;
-
 const SNIPPET_CONTEXT = 28;
 
 export interface ReviewSearchableDiffFile {
@@ -51,28 +37,26 @@ export interface SearchableLine {
   normalizedText: string;
 }
 
-function isDiffMetadataLine(line: string): boolean {
-  return DIFF_METADATA_PREFIXES.some(prefix => line.startsWith(prefix));
-}
-
 function buildSearchableLinesForPatch(file: ReviewSearchableDiffFile): SearchableLine[] {
   const lines = file.patch.split('\n');
   const searchableLines: SearchableLine[] = [];
 
   let oldLine = 0;
   let newLine = 0;
+  let inHunk = false;
 
   for (const line of lines) {
     const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunkMatch) {
       oldLine = parseInt(hunkMatch[1], 10) - 1;
       newLine = parseInt(hunkMatch[2], 10) - 1;
+      inHunk = true;
       continue;
     }
 
-    if (isDiffMetadataLine(line)) {
-      continue;
-    }
+    // File headers live before the first hunk. Within a hunk, `--- ` and
+    // `+++ ` can be real source lines and must advance the line counters.
+    if (!inHunk) continue;
 
     const prefix = line[0];
     const text = line.slice(1);
