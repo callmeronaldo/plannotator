@@ -784,13 +784,13 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     const handle = viewerRef.current;
     const viewer = handle?.getInstance();
     if (handle == null || viewer == null) {
-      setOverviewMarks([]);
+      setOverviewMarks(current => current.length === 0 ? current : []);
       return;
     }
 
     const documentHeight = viewer.getScrollHeight();
     if (documentHeight <= 0) {
-      setOverviewMarks([]);
+      setOverviewMarks(current => current.length === 0 ? current : []);
       return;
     }
 
@@ -827,7 +827,17 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         });
       }
     }
-    setOverviewMarks(nextMarks);
+    // Post-render runs on scroll as Pierre mounts/recycles items. Retain the
+    // existing state when only visibility changed, avoiding a shell redraw.
+    // Still read live geometry and hunks every time: edits mutate metadata in
+    // place, and expansion/rebasing can change logical offsets independently.
+    setOverviewMarks(current => (
+      current.length === nextMarks.length && current.every((mark, index) => {
+        const next = nextMarks[index];
+        return mark.top === next.top && mark.height === next.height &&
+          mark.additions === next.additions && mark.deletions === next.deletions;
+      })
+    ) ? current : nextMarks);
   });
 
   const scheduleOverviewUpdate = useStableCallback(() => {

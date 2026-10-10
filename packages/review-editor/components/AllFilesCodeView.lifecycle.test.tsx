@@ -10,6 +10,9 @@ let scrollTargets: Array<Record<string, unknown>> = [];
 let lastCodeViewProps: Record<string, unknown> | null = null;
 let toolbarSelections: Array<SelectedLineRange | null> = [];
 let workerPoolReady = true;
+let overviewRenders = 0;
+let overviewDocumentHeight = 200;
+let overviewItemTop = 8;
 
 // Captured BEFORE the mocks below replace the specifiers, so this file can put
 // the real modules back when it is done. `mock.module` is process global and
@@ -28,6 +31,15 @@ let workerPoolReady = true;
 const realPierreDiffs = { ...(await import('@pierre/diffs')) };
 const realPierreDiffsReact = { ...(await import('@pierre/diffs/react')) };
 const realResolveSyntaxTheme = (await import('@plannotator/ui/utils/syntaxTheme')).resolveSyntaxTheme;
+const realOverview = { ...(await import('./DiffOverviewRuler')) };
+
+mock.module('./DiffOverviewRuler', () => ({
+  ...realOverview,
+  DiffOverviewRuler: (props: React.ComponentProps<typeof realOverview.DiffOverviewRuler>) => {
+    overviewRenders += 1;
+    return <realOverview.DiffOverviewRuler {...props} />;
+  },
+}));
 
 mock.module('../workerPool', () => ({
   useIsWorkerPoolReadyOrDisabled: () => workerPoolReady,
@@ -92,9 +104,9 @@ mock.module('@pierre/diffs/react', () => ({
       getInstance: () => ({
         getRenderedItems: () => [],
         getScrollTop: () => 0,
-        getScrollHeight: () => 200,
+        getScrollHeight: () => overviewDocumentHeight,
         getHeight: () => 100,
-        getTopForItem: () => 8,
+        getTopForItem: () => overviewItemTop,
         scrollTo: (target: Record<string, unknown>) => scrollTargets.push(target),
       }),
     }));
@@ -178,6 +190,9 @@ afterEach(async () => {
   lastCodeViewProps = null;
   toolbarSelections = [];
   workerPoolReady = true;
+  overviewRenders = 0;
+  overviewDocumentHeight = 200;
+  overviewItemTop = 8;
 });
 
 // Hand the real @pierre/diffs back to the process. Only the two library
@@ -192,6 +207,7 @@ afterEach(async () => {
 afterAll(() => {
   mock.module('@pierre/diffs', () => realPierreDiffs);
   mock.module('@pierre/diffs/react', () => realPierreDiffsReact);
+  mock.module('./DiffOverviewRuler', () => realOverview);
 });
 
 // Guards the capture idiom itself. If the spreads above are ever reduced back
@@ -215,6 +231,21 @@ describe('the @pierre/diffs restore handles', () => {
 });
 
 describe('AllFilesCodeView change overview', () => {
+  async function postRender() {
+    const options = lastCodeViewProps!.options as { onPostRender: (...args: unknown[]) => void };
+    const item = (lastCodeViewProps!.initialItems as Array<{
+      type: 'diff'; id: string; collapsed?: boolean;
+      fileDiff: { isPartial: boolean; unifiedLineCount: number; hunks: Array<{ additionLines: number }> };
+    }>)[0];
+    // Full metadata avoids a content fetch while exercising the live ruler.
+    item.fileDiff.isPartial = false;
+    await act(async () => {
+      options.onPostRender(document.createElement('div'), {}, 'update', { item });
+      await new Promise(resolve => setTimeout(resolve, 35));
+    });
+    return item;
+  }
+
   // Guards the default review landing surface: keeping the ruler only on the
   // single-file panel made it absent from the all-files view users actually see.
   test.skipIf(!hasDom)('renders the change ruler in the all-files surface', async () => {
@@ -229,6 +260,62 @@ describe('AllFilesCodeView change overview', () => {
     // The marks arrive asynchronously after CodeView's first render. The
     // content gutter must not depend on that arrival or every file reflows once.
     expect(host.querySelector('[data-diff-overview-content]')?.className).toContain('right-3.5');
+  });
+
+  // Performance regression: scroll-driven Pierre updates used to redraw the
+  // entire all-files shell even when the ruler's values were unchanged.
+  test.skipIf(!hasDom)('does not redraw the overview on repeated unchanged item renders', async () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await render();
+    await postRender();
+    await postRender();
+    const settledRenders = overviewRenders;
+    for (let index = 0; index < 5; index += 1) await postRender();
+    expect(overviewRenders).toBe(settledRenders);
+    expect(host.querySelector('[data-diff-overview-ruler]')).not.toBeNull();
+  });
+
+  // Equality must cover both geometry and counts. Pierre mutates edited diff
+  // metadata in place, so an identity-only cache can silently strand the ruler.
+  test.skipIf(!hasDom)('refreshes marks after layout changes, in-place edits, collapse and file removal', async () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await render();
+    const item = await postRender();
+    const marker = () => host!.querySelector<HTMLElement>('[data-diff-overview-ruler] > div[title]')!;
+    const originalTop = marker().style.top;
+    overviewDocumentHeight = 500;
+    overviewItemTop = 28;
+    await postRender();
+    expect(marker().style.top).not.toBe(originalTop);
+
+    const expandedHeight = marker().style.height;
+    item.fileDiff.hunks[0].additionLines = 3;
+    item.fileDiff.unifiedLineCount = 4;
+    await postRender();
+    // The relative height stays identical (2/2 -> 4/4); counts alone must
+    // still update, even with the same metadata and hunk-array identities.
+    expect(marker().style.height).toBe(expandedHeight);
+    expect(marker().title).toContain('+3');
+    expect(marker().title).toContain('−1');
+    item.collapsed = true;
+    await postRender();
+    expect(marker().style.height).not.toBe(expandedHeight);
+    expect(marker().title).toContain('+3');
+
+    overviewDocumentHeight = 0;
+    await postRender();
+    expect(host.querySelector('[data-diff-overview-ruler]')).toBeNull();
+    overviewDocumentHeight = 500;
+    await postRender();
+    expect(marker().title).toContain('+3');
+
+    await render({ files: [] });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 35)); });
+    expect(host.querySelector('[data-diff-overview-ruler]')).toBeNull();
   });
 });
 
