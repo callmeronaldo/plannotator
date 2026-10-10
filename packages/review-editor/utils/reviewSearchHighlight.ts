@@ -85,30 +85,61 @@ function lineKey(match: ReviewSearchMatch): string {
   return `${match.filePath}:${match.side}:${match.lineNumber}`;
 }
 
-export function applySearchHighlights(
-  root: ParentNode,
+interface PreparedSearchHighlights {
+  regex: RegExp;
+  lineGroups: Map<string, ReviewSearchMatch[]>;
+}
+
+function prepareSearchHighlights(
   query: string,
   searchMatches: ReviewSearchMatch[],
-  activeSearchMatchId: string | null,
-) {
-  clearSearchHighlights(root);
+): PreparedSearchHighlights | null {
   const trimmed = query.trim();
-  if (!trimmed || searchMatches.length === 0) return;
+  if (!trimmed || searchMatches.length === 0) return null;
 
-  const regex = new RegExp(escapeRegExp(trimmed), 'gi');
-
-  // Group matches by line so we process each line element once,
-  // assigning each DOM occurrence to the correct match object.
   const lineGroups = new Map<string, ReviewSearchMatch[]>();
-  searchMatches.forEach((match) => {
+  for (const match of searchMatches) {
     const key = lineKey(match);
     const group = lineGroups.get(key);
     if (group) group.push(match);
     else lineGroups.set(key, [match]);
-  });
+  }
+  return { regex: new RegExp(escapeRegExp(trimmed), 'gi'), lineGroups };
+}
 
+function indexRenderedLines(root: ParentNode): Map<string, Element> {
+  const lines = new Map<string, Element>();
+  for (const line of root.querySelectorAll('[data-line][data-line-type]')) {
+    const type = line.getAttribute('data-line-type');
+    const side = type === 'addition' || type === 'change-addition' ? 'addition'
+      : type === 'deletion' || type === 'change-deletion' ? 'deletion'
+      : type === 'context' || type === 'context-expanded' ? 'context'
+      : null;
+    if (side == null) continue;
+    const key = `${side}:${line.getAttribute('data-line')}`;
+    // Match querySelector's first-in-document behavior, including duplicate
+    // context coordinates in split view. Keep sides distinct in unified view.
+    if (!lines.has(key)) lines.set(key, line);
+  }
+  return lines;
+}
+
+function applyPreparedSearchHighlights(
+  root: ParentNode,
+  prepared: PreparedSearchHighlights | null,
+  activeSearchMatchId: string | null,
+) {
+  clearSearchHighlights(root);
+  if (prepared == null) return;
+
+  // Index once per pass, not once per hit. Do not retain DOM rows across
+  // passes: Pierre replaces rows and recycles whole item elements.
+  const lines = indexRenderedLines(root);
+  if (lines.size === 0) return;
+  const { regex, lineGroups } = prepared;
   lineGroups.forEach((matches) => {
-    const lineEl = root.querySelector(getLineSelector(matches[0]));
+    const match = matches[0];
+    const lineEl = lines.get(`${match.side}:${match.lineNumber}`);
     if (!lineEl) return;
 
     const textWalker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT, {
@@ -163,6 +194,15 @@ export function applySearchHighlights(
   });
 }
 
+export function applySearchHighlights(
+  root: ParentNode,
+  query: string,
+  searchMatches: ReviewSearchMatch[],
+  activeSearchMatchId: string | null,
+) {
+  applyPreparedSearchHighlights(root, prepareSearchHighlights(query, searchMatches), activeSearchMatchId);
+}
+
 /**
  * CodeView variant of {@link applySearchHighlights}.
  *
@@ -197,16 +237,15 @@ export function applyItemSearchHighlights(
   if (idle && !markedItemNodes.has(itemNode)) return;
 
   const roots = getSearchRoots(itemNode);
-  // Clear first so a node with stale marks (recycled element, query changed)
-  // is reset even when this item now has no matches.
-  for (const root of roots) clearSearchHighlights(root);
+  const prepared = prepareSearchHighlights(trimmed, matchesForItem);
   markedItemNodes.delete(itemNode);
-  if (idle) return;
-
+  // Clear and apply in one pass per root, including when an idle/recycled item
+  // needs its stale marks removed. Match grouping and regex are shared across
+  // roots, but the row index is always local to the current DOM.
   for (const root of roots) {
-    applySearchHighlights(root, query, matchesForItem, activeSearchMatchId);
+    applyPreparedSearchHighlights(root, prepared, activeSearchMatchId);
   }
-  markedItemNodes.add(itemNode);
+  if (!idle) markedItemNodes.add(itemNode);
 }
 
 /** Clear all search marks inside a single CodeView item's element (used when an
