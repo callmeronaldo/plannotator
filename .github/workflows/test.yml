@@ -108,6 +108,7 @@ jobs:
           packages/review-editor/dock/panels/ReviewPROverviewPanel.ui.test.tsx
           packages/review-editor/components/FileHeader.edit.test.tsx
           packages/review-editor/edit/useEditSession.recovery.test.tsx
+          packages/review-editor/edit/useSingleFileEditSession.test.tsx
           packages/review-editor/edit/discardRestoreRender.test.tsx
           packages/review-editor/edit/selectionActionPopover.test.ts
           packages/review-editor/components/AllFilesCodeView.lifecycle.test.tsx

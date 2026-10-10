@@ -79,6 +79,7 @@ export function useSingleFileEditSession({
   const [editDisabledReason, setEditDisabledReason] = useState<string | null>(null);
   const [renderVersion, setRenderVersion] = useState(0);
   const sessionRef = useRef<ActiveSingleFileSession | null>(null);
+  const startingRef = useRef(false);
   const mountedRef = useRef(true);
   const fileRef = useRef(file);
   fileRef.current = file;
@@ -199,7 +200,7 @@ export function useSingleFileEditSession({
   const cancelEdit = useStableCallback(() => endSession(true));
 
   const startEdit = useStableCallback(() => {
-    if (!enabled || sessionRef.current) return;
+    if (!enabled || sessionRef.current || startingRef.current) return;
     const target = fileRef.current;
     if (target.status === 'deleted') {
       setEditDisabledReason('Deleted files have no content to edit');
@@ -207,15 +208,21 @@ export function useSingleFileEditSession({
     }
 
     const expectedGeneration = generationRef.current;
+    // Own startup before the first await: another click must not launch a
+    // delayed hydration that could overwrite this session after typing starts.
+    startingRef.current = true;
     void (async () => {
       try {
         await loadPierreEdit();
       } catch {
-        setEditDisabledReason('Editor failed to load');
+        if (mountedRef.current && generationRef.current === expectedGeneration) {
+          setEditDisabledReason('Editor failed to load');
+        }
         return;
       }
-      const hydrated = await ensureFullContent();
       if (!mountedRef.current || generationRef.current !== expectedGeneration) return;
+      const hydrated = await ensureFullContent();
+      if (!mountedRef.current || generationRef.current !== expectedGeneration || sessionRef.current) return;
       if (!hydrated) {
         setEditDisabledReason('Full file content unavailable');
         return;
@@ -243,7 +250,9 @@ export function useSingleFileEditSession({
       resetChangeCount();
       setEditableDiff(editable);
       setEditing(true);
-    })();
+    })().finally(() => {
+      startingRef.current = false;
+    });
   });
 
   const handleMakeAnnotation = useStableCallback(
