@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test';
-import React, { act, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { act, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { SelectedLineRange } from '@plannotator/ui/types';
 import type { DiffFile } from '../types';
@@ -32,6 +32,9 @@ const realPierreDiffs = { ...(await import('@pierre/diffs')) };
 const realPierreDiffsReact = { ...(await import('@pierre/diffs/react')) };
 const realResolveSyntaxTheme = (await import('@plannotator/ui/utils/syntaxTheme')).resolveSyntaxTheme;
 const realOverview = { ...(await import('./DiffOverviewRuler')) };
+let processFileImpl: typeof realPierreDiffs.processFile | null = null;
+let seedAugmentation = false;
+let codeViewUpdates: Array<{ id: string }> = [];
 
 mock.module('./DiffOverviewRuler', () => ({
   ...realOverview,
@@ -69,7 +72,7 @@ mock.module('@pierre/diffs', () => ({
     deletionLines: [],
     additionLines: [],
   }),
-  processFile: () => null,
+  processFile: (...args: Parameters<typeof realPierreDiffs.processFile>) => processFileImpl?.(...args) ?? null,
 }));
 
 mock.module('@pierre/diffs/react', () => ({
@@ -78,6 +81,7 @@ mock.module('@pierre/diffs/react', () => ({
       initialItems?: Array<{ id: string }>;
       className?: string;
       containerRef?: React.Ref<HTMLDivElement>;
+      options?: { onPostRender?: (...args: unknown[]) => void };
     },
     ref: React.ForwardedRef<unknown>,
   ) {
@@ -89,11 +93,20 @@ mock.module('@pierre/diffs/react', () => ({
         codeViewUnmounts += 1;
       };
     }, []);
+    // Reproduce Pierre's seed wave BEFORE the handle exists. Deferring parsing
+    // must not introduce a viewerRef guard that loses this initial fetch.
+    useLayoutEffect(() => {
+      if (!seedAugmentation) return;
+      for (const item of props.initialItems ?? []) {
+        props.options?.onPostRender?.(document.createElement('div'), {}, 'mount', { item });
+      }
+    }, []);
     useImperativeHandle(ref, () => ({
       addItems: () => {},
       getItem: (id: string) => itemsRef.current.get(id),
       updateItem: (item: { id: string }) => {
         itemsRef.current.set(item.id, item);
+        codeViewUpdates.push(item);
         return true;
       },
       updateItemId: () => true,
@@ -193,6 +206,9 @@ afterEach(async () => {
   overviewRenders = 0;
   overviewDocumentHeight = 200;
   overviewItemTop = 8;
+  processFileImpl = null;
+  seedAugmentation = false;
+  codeViewUpdates = [];
 });
 
 // Hand the real @pierre/diffs back to the process. Only the two library
@@ -489,6 +505,199 @@ describe('AllFilesCodeView compact-touch line selection', () => {
     });
 
     expect(toolbarSelections).toEqual([range]);
+  });
+});
+
+describe('AllFilesCodeView full-content preparation', () => {
+  type Item = { id: string; type: 'diff'; version?: number; fileDiff: ReturnType<typeof realPierreDiffs.getSingularPatch> };
+  const contents = { oldContent: 'old\nunchanged\n', newContent: 'new\nunchanged\n' };
+
+  async function mount(files = [file], snapshot = 'first') {
+    if (!host) {
+      host = document.createElement('div');
+      document.body.appendChild(host);
+      root = createRoot(host);
+    }
+    await render({ files, reviewSnapshotId: snapshot });
+    return lastCodeViewProps!.initialItems as Item[];
+  }
+
+  async function postRender(items: Item[]) {
+    await act(async () => {
+      const options = lastCodeViewProps!.options as { onPostRender: (...args: unknown[]) => void };
+      for (const item of items) options.onPostRender(document.createElement('div'), {}, 'update', { item });
+      await new Promise(resolve => setTimeout(resolve, 10));
+    });
+  }
+
+  async function pause(ms = 225) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, ms)); });
+  }
+
+  async function withContents(
+    body: (requests: AbortSignal[]) => Promise<void>,
+    response = contents,
+  ) {
+    const originalFetch = globalThis.fetch;
+    const requests: AbortSignal[] = [];
+    globalThis.fetch = Object.assign(async (_input: unknown, init?: RequestInit) => {
+      requests.push(init!.signal!);
+      return Response.json(response);
+    }, originalFetch);
+    try { await body(requests); } finally { globalThis.fetch = originalFetch; }
+  }
+
+  test.skipIf(!hasDom)('does not parse during scrolling; full source and expansion metadata arrive after idle', async () => {
+    let parsed = 0;
+    processFileImpl = (...args) => { parsed++; return realPierreDiffs.processFile(...args); };
+    await withContents(async requests => {
+      const items = await mount();
+      const scroll = lastCodeViewProps!.onScroll as (position: number) => void;
+      await act(async () => scroll(10));
+      await postRender(items);
+      expect(requests).toHaveLength(1);
+      expect(parsed).toBe(0);
+      expect(items[0].fileDiff.isPartial).toBe(true);
+      await pause(90);
+      await act(async () => scroll(20));
+      await pause(90);
+      expect(parsed).toBe(0);
+      expect(codeViewUpdates).toHaveLength(0);
+
+      await pause();
+      expect(parsed).toBe(1);
+      expect(items[0].fileDiff.isPartial).toBe(false);
+      expect(items[0].fileDiff.additionLines).toEqual(['new\n', 'unchanged\n']);
+      expect(items[0].fileDiff.deletionLines).toEqual(['old\n', 'unchanged\n']);
+      expect(items[0].fileDiff.hunks[0].additionStart).toBe(1);
+      expect(items[0].fileDiff.cacheKey).toContain('#full');
+      await postRender(items);
+      expect(requests).toHaveLength(1);
+      expect(parsed).toBe(1);
+    });
+  });
+
+  test.skipIf(!hasDom)('yields to resumed scrolling between ready files and waits for idle again', async () => {
+    const updatesBetweenJobs: number[] = [];
+    let first = true;
+    processFileImpl = (...args) => {
+      if (first) {
+        first = false;
+        setTimeout(() => {
+          updatesBetweenJobs.push(codeViewUpdates.length);
+          (lastCodeViewProps!.onScroll as (position: number) => void)(20);
+        }, 0);
+      }
+      return realPierreDiffs.processFile(...args);
+    };
+    await withContents(async () => {
+      const other = { ...file, path: 'other.ts', patch: file.patch.replaceAll('target.ts', 'other.ts') };
+      const items = await mount([file, other]);
+      await postRender(items);
+      await pause();
+      expect(updatesBetweenJobs).toEqual([1]);
+      expect(items.filter(item => !item.fileDiff.isPartial)).toHaveLength(1);
+      await pause();
+      expect(items.every(item => !item.fileDiff.isPartial)).toBe(true);
+    });
+  });
+
+  test.skipIf(!hasDom)('starts the initial fetch before the CodeView handle is assigned', async () => {
+    let parsed = 0;
+    processFileImpl = (...args) => { parsed++; return realPierreDiffs.processFile(...args); };
+    seedAugmentation = true;
+    await withContents(async requests => {
+      const items = await mount();
+      expect(requests).toHaveLength(1);
+      await pause();
+      expect(parsed).toBe(1);
+      expect(items[0].fileDiff.additionLines).toEqual(['new\n', 'unchanged\n']);
+    });
+  });
+
+  test.skipIf(!hasDom)('drops ready old-generation data without parsing or updating the replacement item', async () => {
+    let parsed = 0;
+    processFileImpl = (...args) => { parsed++; return realPierreDiffs.processFile(...args); };
+    await withContents(async requests => {
+      const oldItems = await mount();
+      await postRender(oldItems);
+      const newItems = await mount([file], 'second');
+      expect(requests[0].aborted).toBe(true);
+      await pause();
+      expect(parsed).toBe(0);
+      expect(newItems[0].fileDiff.isPartial).toBe(true);
+      expect(codeViewUpdates).toHaveLength(0);
+
+      await postRender(newItems);
+      await pause();
+      expect(requests).toHaveLength(2);
+      expect(parsed).toBe(1);
+      expect(newItems[0].fileDiff.additionLines).toEqual(['new\n', 'unchanged\n']);
+    });
+  });
+
+  test.skipIf(!hasDom)('preserves fresh seed-wave data when replacing an old queued job for the same id', async () => {
+    let parsed = 0;
+    processFileImpl = (...args) => { parsed++; return realPierreDiffs.processFile(...args); };
+    seedAugmentation = true;
+    await withContents(async requests => {
+      const oldItems = await mount();
+      const newItems = await mount([file], 'second');
+      expect(requests).toHaveLength(2);
+      expect(requests[0].aborted).toBe(true);
+      expect(requests[1].aborted).toBe(false);
+      await pause();
+      expect(parsed).toBe(1);
+      expect(oldItems[0].fileDiff.isPartial).toBe(true);
+      expect(newItems[0].fileDiff.additionLines).toEqual(['new\n', 'unchanged\n']);
+      expect(codeViewUpdates).toHaveLength(1);
+    });
+  });
+
+  test.skipIf(!hasDom)('cancels ready preparation on unmount, not only its eventual item update', async () => {
+    let parsed = 0;
+    processFileImpl = (...args) => { parsed++; return realPierreDiffs.processFile(...args); };
+    await withContents(async requests => {
+      const items = await mount();
+      await postRender(items);
+      await act(async () => root!.unmount());
+      root = null;
+      await pause();
+      expect(requests[0].aborted).toBe(true);
+      expect(parsed).toBe(0);
+      expect(codeViewUpdates).toHaveLength(0);
+    });
+  });
+
+  test.skipIf(!hasDom)('keeps the raw patch for inconsistent contents without repeated fetches', async () => {
+    let parsed = 0;
+    processFileImpl = (...args) => { parsed++; return realPierreDiffs.processFile(...args); };
+    await withContents(async requests => {
+      const items = await mount();
+      await postRender(items);
+      await pause();
+      expect(items[0].fileDiff.isPartial).toBe(true);
+      expect(parsed).toBe(0);
+      await postRender(items);
+      expect(requests).toHaveLength(1);
+    }, { oldContent: 'old\n', newContent: 'new\nextra\n' });
+  });
+
+  test.skipIf(!hasDom)('a failed parse retains that raw patch while another ready file still completes', async () => {
+    processFileImpl = (patch, options) => {
+      if (patch.includes('target.ts')) throw new Error('simulated parser failure');
+      return realPierreDiffs.processFile(patch, options);
+    };
+    await withContents(async requests => {
+      const other = { ...file, path: 'other.ts', patch: file.patch.replaceAll('target.ts', 'other.ts') };
+      const items = await mount([file, other]);
+      await postRender(items);
+      await pause();
+      expect(items.find(item => item.id === 'target.ts')!.fileDiff.isPartial).toBe(true);
+      expect(items.find(item => item.id === 'other.ts')!.fileDiff.additionLines).toEqual(['new\n', 'unchanged\n']);
+      await postRender(items);
+      expect(requests).toHaveLength(2);
+    });
   });
 });
 

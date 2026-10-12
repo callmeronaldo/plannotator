@@ -1315,43 +1315,47 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     refreshEditSessionMarkers();
   }, [annotations, refreshEditSessionMarkers]);
 
-  // Augmentation APPLIES are deferred to scroll-idle. updateItem() mutates
-  // item layout — the full-content parse counts collapsed-context regions the
-  // raw-patch parse doesn't, so the item GROWS — and forces a re-render +
-  // re-tokenize. Landing that mid-gesture causes visible chop; worse, when
-  // the grown item sits ABOVE CodeView's scroll anchor, its corrective
-  // scrollTo() kills wheel momentum and pins the viewport ("scrolling but
-  // nothing changes"). Fetches still start as items enter the window — only
-  // the item mutation waits for the scroll to settle. Staleness is re-checked
-  // at apply time; the per-item map keeps only the newest apply per item.
-  const pendingAugmentAppliesRef = useRef(new Map<string, () => void>());
+  // Fetch on entry, but prepare full-file metadata AND apply it at scroll-idle.
+  // Parsing is synchronous and can consume a frame before updateItem even runs;
+  // updateItem also grows collapsed context and can correct the scroll anchor,
+  // interrupting wheel momentum. Keep both outside the active gesture, one file
+  // per task so new input can run and the next job re-checks scroll activity.
+  const pendingAugmentationsRef = useRef(new Map<string, () => void>());
   const augmentFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastScrollTsRef = useRef(0);
 
-  const flushAugmentApplies = useCallback(() => {
+  const flushAugmentations = useCallback(() => {
     augmentFlushTimerRef.current = null;
     const idleFor = Date.now() - lastScrollTsRef.current;
     if (idleFor < AUGMENT_APPLY_IDLE_MS) {
       augmentFlushTimerRef.current = setTimeout(
-        flushAugmentApplies,
+        flushAugmentations,
         AUGMENT_APPLY_IDLE_MS - idleFor + 10,
       );
       return;
     }
-    const applies = [...pendingAugmentAppliesRef.current.values()];
-    pendingAugmentAppliesRef.current.clear();
-    for (const apply of applies) apply();
+    const pending = pendingAugmentationsRef.current;
+    const next = pending.entries().next().value;
+    if (next == null) return;
+    const [itemId, prepareAndApply] = next;
+    pending.delete(itemId);
+    prepareAndApply();
+    if (pending.size > 0 && augmentFlushTimerRef.current == null) {
+      augmentFlushTimerRef.current = setTimeout(flushAugmentations, 0);
+    }
   }, []);
 
-  const queueAugmentApply = useCallback((itemId: string, apply: () => void) => {
-    pendingAugmentAppliesRef.current.set(itemId, apply);
+  const queueAugmentation = useCallback((itemId: string, prepareAndApply: () => void) => {
+    pendingAugmentationsRef.current.set(itemId, prepareAndApply);
     if (augmentFlushTimerRef.current == null) {
-      augmentFlushTimerRef.current = setTimeout(flushAugmentApplies, AUGMENT_APPLY_IDLE_MS);
+      augmentFlushTimerRef.current = setTimeout(flushAugmentations, AUGMENT_APPLY_IDLE_MS);
     }
-  }, [flushAugmentApplies]);
+  }, [flushAugmentations]);
 
   useEffect(() => () => {
     if (augmentFlushTimerRef.current != null) clearTimeout(augmentFlushTimerRef.current);
+    augmentFlushTimerRef.current = null;
+    pendingAugmentationsRef.current.clear();
   }, []);
 
   // Fetch full file contents for one item, reparse with processFile, and swap
@@ -1367,7 +1371,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     // handle would make the initial window depend entirely on CodeView's
     // second (rAF `fitPerfectly`) render wave for augmentation — a library
     // implementation detail we'd rather not lean on. The handle is only needed
-    // at fetch RESOLUTION, where it is re-read fresh from the ref.
+    // when ready contents are processed at scroll-idle, where it is re-read fresh.
     const augmentState = augmentRef.current;
     const generation = fileSetKeyRef.current;
     // One fetch per item PER DIFF: a same-generation entry ('pending' or
@@ -1429,49 +1433,10 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
           return;
         }
 
-        // Stale-content guard: the file may have changed on disk since this
-        // diff was captured (an agent editing/committing mid-review is normal
-        // usage). Augmenting with contents that no longer reconcile with the
-        // patch produces an internally inconsistent FileDiffMetadata — Pierre's
-        // virtualization then fails layout estimation for the item ("trailing
-        // context mismatch", content disappearing while scrolling). Keep the
-        // raw-patch view for this file instead; a diff refresh re-augments.
-        if (!isContentConsistentWithPatch(file.patch, data.oldContent, data.newContent)) {
-          console.warn(
-            `AllFilesCodeView: skipping full-content expansion for ${file.path} — file changed since the diff was captured`,
-          );
-          augmentState.set(itemId, { status: 'done', controller, generation });
-          return;
-        }
-
-        let augmented: FileDiffMetadata;
-        try {
-          const result = processFile(file.patch, {
-            oldFile:
-              data.oldContent != null
-                ? { name: file.oldPath || file.path, contents: data.oldContent }
-                : undefined,
-            newFile:
-              data.newContent != null ? { name: file.path, contents: data.newContent } : undefined,
-          });
-          if (!result || result.isPartial) {
-            augmentState.set(itemId, { status: 'done', controller, generation });
-            return;
-          }
-          augmented = result;
-        } catch {
-          augmentState.set(itemId, { status: 'error', controller, generation });
-          return;
-        }
-
-        if (isStale()) return;
-
-        // Defer the item mutation to scroll-idle (see queueAugmentApply) —
-        // landing it mid-gesture chops scrolling and can kill momentum via
-        // CodeView's anchor-correcting scrollTo. All staleness checks re-run
-        // at apply time: the queue can hold entries across aborts and diff
-        // switches.
-        queueAugmentApply(itemId, () => {
+        // Keep validation and parsing inside the idle job as well as the item
+        // mutation. A response can arrive during scrolling, or become stale
+        // while waiting; stale/editing items must not spend time preparing it.
+        queueAugmentation(itemId, () => {
           if (isStale()) return;
           const liveHandle = viewerRef.current;
           const item = liveHandle?.getItem(itemId);
@@ -1489,6 +1454,37 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
             augmentState.set(itemId, { status: 'done', controller, generation });
             return;
           }
+
+          // The fetched contents must still reconcile with the captured patch;
+          // otherwise Pierre's context counts/layout would be inconsistent.
+          if (!isContentConsistentWithPatch(file.patch, data.oldContent, data.newContent)) {
+            console.warn(
+              `AllFilesCodeView: skipping full-content expansion for ${file.path} — file changed since the diff was captured`,
+            );
+            augmentState.set(itemId, { status: 'done', controller, generation });
+            return;
+          }
+
+          let augmented: FileDiffMetadata;
+          try {
+            const result = processFile(file.patch, {
+              oldFile:
+                data.oldContent != null
+                  ? { name: file.oldPath || file.path, contents: data.oldContent }
+                  : undefined,
+              newFile:
+                data.newContent != null ? { name: file.path, contents: data.newContent } : undefined,
+            });
+            if (!result || result.isPartial) {
+              augmentState.set(itemId, { status: 'done', controller, generation });
+              return;
+            }
+            augmented = result;
+          } catch {
+            augmentState.set(itemId, { status: 'error', controller, generation });
+            return;
+          }
+          if (isStale()) return;
 
           // cacheKey MUST change when fileDiff contents change (types.ts warning):
           // otherwise the worker / highlight caches would serve the stale partial
@@ -1517,7 +1513,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         augmentState.set(itemId, { status: 'error', controller, generation });
         void err;
       });
-  }, [queueAugmentApply]);
+  }, [queueAugmentation]);
 
   // (Re)apply search marks for ONE item's node. Called on every render of that
   // item (onPostRender mount/update) so marks survive CodeView's element
