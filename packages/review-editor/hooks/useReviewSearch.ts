@@ -84,14 +84,23 @@ export function useReviewSearch({
     return () => clearTimeout(timeoutId);
   }, [searchQuery]);
 
-  const isSearchPending = searchQuery.trim() !== ''
+  const hasSearchQuery = searchQuery.trim() !== '';
+  const isSearchPending = hasSearchQuery
     && searchQuery.trim().toLowerCase() !== debouncedSearchQuery.trim().toLowerCase();
 
-  const searchIndex = useMemo(() => buildSearchIndex(files), [files]);
+  // Keep a lazy index per files snapshot, including after clearing a query.
+  // A new snapshot gets its own cache; rendering without a query never parses it.
+  const getSearchIndex = useMemo(() => {
+    let index: ReturnType<typeof buildSearchIndex> | undefined;
+    return () => (index ??= buildSearchIndex(files));
+  }, [files]);
 
   const searchMatches = useMemo(() => {
-    return findMatchesInIndex(searchIndex, debouncedSearchQuery);
-  }, [searchIndex, debouncedSearchQuery]);
+    // Clearing the input can share a render with a diff switch, before the
+    // debounce-reset effect runs. Do not index that snapshot for the old query.
+    if (!hasSearchQuery || !debouncedSearchQuery.trim()) return [];
+    return findMatchesInIndex(getSearchIndex(), debouncedSearchQuery);
+  }, [getSearchIndex, debouncedSearchQuery, hasSearchQuery]);
 
   const searchGroups = useMemo(() => {
     return groupReviewSearchMatches(files, searchMatches);
